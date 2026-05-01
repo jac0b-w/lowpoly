@@ -1,10 +1,6 @@
-use std::hash::{DefaultHasher, Hash, Hasher};
-
-use image::{DynamicImage, EncodableLayout, GenericImageView, GrayImage, Rgba, RgbaImage};
+use image::{DynamicImage, GenericImageView, GrayImage, Rgba, RgbaImage};
 use imageproc::drawing::draw_antialiased_polygon_mut;
 use imageproc::point::Point;
-use libblur::{self, AnisotropicRadius};
-use rand::{RngExt, SeedableRng, rngs::SmallRng, seq::index};
 use rayon::prelude::*;
 use spade::{DelaunayTriangulation, Point2, Triangulation};
 use thiserror::Error;
@@ -23,12 +19,23 @@ pub enum LowpolyError {
 #[derive(Debug, Copy, Clone)]
 pub enum SampleSeed {
     Random,
-    Image,
     Custom(u64),
 }
 
+type TriangleVertices = [[f32; 2]; 3];
+type Color = [u8; 4];
+
+pub fn seed_from_image(image: &DynamicImage) -> u64 {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    image.as_bytes().hash(&mut hasher);
+    hasher.finish()
+}
+
 pub fn lowpoly(image: DynamicImage, n: u64) -> Result<RgbaImage, LowpolyError> {
-    lowpoly_seeded(image, n, SampleSeed::Image)
+    let seed = SampleSeed::Custom(seed_from_image(&image));
+    lowpoly_seeded(image, n, seed)
 }
 
 pub fn lowpoly_seeded(
@@ -75,18 +82,9 @@ fn diff_of_gaussians(gray_image: DynamicImage) -> Result<GrayImage, LowpolyError
     .expect("Should always be able to rebuild image from gray_image dimensions"))
 }
 
-fn add_blur(image: DynamicImage, sigma: f64) -> Result<DynamicImage, LowpolyError> {
-    // fast
-    libblur::fast_gaussian_blur_image(
-        image,
-        AnisotropicRadius::new(sigma as u32),
-        libblur::EdgeMode2D::new(libblur::EdgeMode::Clamp),
-        libblur::ThreadingPolicy::Adaptive,
-    )
-    .ok_or(LowpolyError::BlurError)
-}
-
 fn sample(diff_image: &GrayImage, n: u64, seed: SampleSeed) -> Result<Vec<[u32; 2]>, LowpolyError> {
+    use rand::{RngExt, SeedableRng, rngs::SmallRng, seq::index};
+
     let (w, h) = diff_image.dimensions();
 
     let num_pixels = w as u64 * h as u64;
@@ -96,11 +94,6 @@ fn sample(diff_image: &GrayImage, n: u64, seed: SampleSeed) -> Result<Vec<[u32; 
 
     let mut rng: SmallRng = match seed {
         SampleSeed::Random => rand::make_rng(),
-        SampleSeed::Image => {
-            let mut hasher = DefaultHasher::new();
-            diff_image.as_bytes().hash(&mut hasher);
-            SmallRng::seed_from_u64(hasher.finish())
-        }
         SampleSeed::Custom(state) => SmallRng::seed_from_u64(state),
     };
 
@@ -131,23 +124,6 @@ fn sample(diff_image: &GrayImage, n: u64, seed: SampleSeed) -> Result<Vec<[u32; 
 fn delaunay(samples: &[[f32; 2]]) -> DelaunayTriangulation<Point2<f32>> {
     let points: Vec<Point2<f32>> = samples.iter().map(|&[x, y]| Point2::new(x, y)).collect();
     DelaunayTriangulation::bulk_load(points).unwrap()
-}
-
-type TriangleVertices = [[f32; 2]; 3];
-type Color = [u8; 4];
-
-fn avg_color(pixels: &[Rgba<u8>]) -> Color {
-    let count = pixels.len() as u64;
-    pixels
-        .iter()
-        .fold([0u64; 4], |mut acc, px| {
-            acc[0] += px[0] as u64;
-            acc[1] += px[1] as u64;
-            acc[2] += px[2] as u64;
-            acc[3] += px[3] as u64;
-            acc
-        })
-        .map(|sum| (sum / count) as u8)
 }
 
 fn get_color_of_tri(
@@ -200,18 +176,6 @@ fn get_color_of_tri(
         .collect()
 }
 
-fn point_in_triangle(px: f32, py: f32, a: &Point2<f32>, b: &Point2<f32>, c: &Point2<f32>) -> bool {
-    let sign = |p1: (f32, f32), p2: (f32, f32), p3: (f32, f32)| {
-        (p1.0 - p3.0) * (p2.1 - p3.1) - (p2.0 - p3.0) * (p1.1 - p3.1)
-    };
-    let d1 = sign((px, py), (a.x, a.y), (b.x, b.y));
-    let d2 = sign((px, py), (b.x, b.y), (c.x, c.y));
-    let d3 = sign((px, py), (c.x, c.y), (a.x, a.y));
-    let has_neg = (d1 < 0.0) || (d2 < 0.0) || (d3 < 0.0);
-    let has_pos = (d1 > 0.0) || (d2 > 0.0) || (d3 > 0.0);
-    !(has_neg && has_pos)
-}
-
 fn draw_triangles(
     mut image: RgbaImage,
     vertices_colors: Vec<(TriangleVertices, Color)>,
@@ -225,4 +189,42 @@ fn draw_triangles(
         )
     }
     image
+}
+
+fn add_blur(image: DynamicImage, sigma: f64) -> Result<DynamicImage, LowpolyError> {
+    use libblur::{self, AnisotropicRadius};
+
+    libblur::fast_gaussian_blur_image(
+        image,
+        AnisotropicRadius::new(sigma as u32),
+        libblur::EdgeMode2D::new(libblur::EdgeMode::Clamp),
+        libblur::ThreadingPolicy::Adaptive,
+    )
+    .ok_or(LowpolyError::BlurError)
+}
+
+fn avg_color(pixels: &[Rgba<u8>]) -> Color {
+    let count = pixels.len() as u64;
+    pixels
+        .iter()
+        .fold([0u64; 4], |mut acc, px| {
+            acc[0] += px[0] as u64;
+            acc[1] += px[1] as u64;
+            acc[2] += px[2] as u64;
+            acc[3] += px[3] as u64;
+            acc
+        })
+        .map(|sum| (sum / count) as u8)
+}
+
+fn point_in_triangle(px: f32, py: f32, a: &Point2<f32>, b: &Point2<f32>, c: &Point2<f32>) -> bool {
+    let sign = |p1: (f32, f32), p2: (f32, f32), p3: (f32, f32)| {
+        (p1.0 - p3.0) * (p2.1 - p3.1) - (p2.0 - p3.0) * (p1.1 - p3.1)
+    };
+    let d1 = sign((px, py), (a.x, a.y), (b.x, b.y));
+    let d2 = sign((px, py), (b.x, b.y), (c.x, c.y));
+    let d3 = sign((px, py), (c.x, c.y), (a.x, a.y));
+    let has_neg = (d1 < 0.0) || (d2 < 0.0) || (d3 < 0.0);
+    let has_pos = (d1 > 0.0) || (d2 > 0.0) || (d3 > 0.0);
+    !(has_neg && has_pos)
 }
