@@ -30,6 +30,61 @@ pub enum EdgePoints {
 type TriangleVertices = [[f32; 2]; 3];
 type Color = [u8; 4];
 
+struct DensityGrid {
+    cell_density: Vec<u32>,
+    cell_color_acc: Vec<[u32; 4]>,
+    image_dimensions: (u32, u32),
+    pub grid_dimensions: (u32, u32),
+}
+
+impl DensityGrid {
+    fn new(image_dimensions: (u32, u32), grid_length: u32) -> Self {
+        let (iw, ih) = image_dimensions;
+        let (gw, gh) = (grid_length, grid_length * ih / iw);
+        let total_circles: usize = (gw * gh) as usize;
+
+        Self {
+            cell_density: vec![0; total_circles],
+            cell_color_acc: vec![[0; 4]; total_circles],
+            image_dimensions: (iw, ih),
+            grid_dimensions: (gw, gh),
+        }
+    }
+
+    fn get_index(&self, ix: u32, iy: u32) -> usize {
+        let gx = ix * self.grid_dimensions.0 / self.image_dimensions.0;
+        let gy = iy * self.grid_dimensions.1 / self.image_dimensions.1;
+        (gy * self.grid_dimensions.0 + gx) as usize
+    }
+
+    fn accumulate(&mut self, ix: u32, iy: u32, color: Color) {
+        let index = self.get_index(ix, iy);
+        self.cell_density[index] += 1;
+        let acc = &mut self.cell_color_acc[index];
+        acc[0] += color[0] as u32;
+        acc[1] += color[1] as u32;
+        acc[2] += color[2] as u32;
+        acc[3] += color[3] as u32;
+    }
+
+    fn get_avg_color(&self, ix: u32, iy: u32) -> Color {
+        let index = self.get_index(ix, iy);
+        let density = self.cell_density[index];
+        let acc = self.cell_color_acc[index];
+        [
+            (acc[0] / density) as u8,
+            (acc[1] / density) as u8,
+            (acc[2] / density) as u8,
+            (acc[3] / density) as u8,
+        ]
+    }
+
+    fn get_density(&self, ix: u32, iy: u32) -> u32 {
+        let index = self.get_index(ix, iy);
+        self.cell_density[index]
+    }
+}
+
 pub fn seed_from_image(image: &DynamicImage) -> u64 {
     use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -65,6 +120,60 @@ pub fn lowpoly_with_seed(
 
     Ok(lowpoly_image)
 }
+
+pub fn circular_seeded(
+    image: DynamicImage,
+    n: u64,
+    seed: SampleSeed,
+    edge_mode: EdgePoints,
+) -> Result<RgbaImage, LowpolyError> {
+    let grayscale = DynamicImage::ImageLuma8(image.to_luma8());
+    let diff_image = diff_of_gaussians(grayscale)?;
+
+    let points: Vec<[f32; 2]> = sample(&diff_image, n, seed, edge_mode)?
+        .iter()
+        .map(|[x, y]| [*x as f32, *y as f32])
+        .collect();
+
+    let mut density = DensityGrid::new(image.dimensions(), 200);
+
+    for [ix, iy] in points.clone() {
+        let color: [u8; 4] = image.get_pixel(ix as u32, iy as u32).0;
+        density.accumulate(ix as u32, iy as u32, color);
+    }
+
+    let (w, h) = image.dimensions();
+
+    let colors: Vec<_> = image.pixels().map(|(_, _, c)| {c}).collect();
+    let mean_color = avg_color(&colors[..]);
+
+    let background = RgbaImage::from_pixel(w, h, Rgba(mean_color));
+    let mosaic = draw_cirlces(density, points, background);
+
+    Ok(mosaic)
+}
+
+fn draw_cirlces(density: DensityGrid, samples: Vec<[f32; 2]>, mut background: RgbaImage) -> RgbaImage {
+    use imageproc::drawing::draw_filled_circle_mut;
+
+    let A = background.dimensions().0 * background.dimensions().1;
+    let grid_cells = density.grid_dimensions.0 * density.grid_dimensions.1;
+    let A_Ng = A as f32 / grid_cells as f32;
+
+    for [x, y] in samples {
+        let rho = density.get_density(x as u32, y as u32) as f32;
+        let r = 2*(A_Ng / rho).powf(0.6) as i32;
+
+        draw_filled_circle_mut(
+            &mut background,
+            (x as i32, y as i32),
+            r,
+            Rgba(density.get_avg_color(x as u32, y as u32)),
+        )
+    }
+    background
+}
+
 
 fn diff_of_gaussians(gray_image: DynamicImage) -> Result<GrayImage, LowpolyError> {
     let (width, height) = gray_image.dimensions();
