@@ -4,7 +4,7 @@ use lowpoly::{SampleSeed, lowpoly, lowpoly_with_seed};
 use std::hint::black_box;
 use std::time::Duration;
 
-const LARGE_IMAGE_PATH: &str = "benches/large_image.png";
+const LARGE_IMAGE_PATH: &str = "benches/inputs/large_image.png";
 
 pub fn large_image(c: &mut Criterion) {
     let large_image = ImageReader::open(LARGE_IMAGE_PATH)
@@ -14,7 +14,7 @@ pub fn large_image(c: &mut Criterion) {
     let (w, h) = large_image.dimensions();
 
     let mut group = c.benchmark_group(format!("Sample Sizes - Large Image ({w}x{h})"));
-    group.measurement_time(Duration::from_secs(60));
+    group.measurement_time(Duration::from_secs(30));
 
     let plot_config = PlotConfiguration::default().summary_scale(criterion::AxisScale::Linear);
     group.plot_config(plot_config);

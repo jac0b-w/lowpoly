@@ -1,6 +1,4 @@
 use image::{DynamicImage, GenericImageView, GrayImage, Rgba, RgbaImage};
-use imageproc::drawing::draw_antialiased_polygon_mut;
-use imageproc::point::Point;
 use rayon::prelude::*;
 use spade::{DelaunayTriangulation, Point2, Triangulation};
 use thiserror::Error;
@@ -62,7 +60,10 @@ pub fn lowpoly_with_seed(
     let triangulation = delaunay(&points[..]);
     let vertices_colors = get_color_of_tri(&image, &triangulation);
 
-    Ok(draw_triangles(image.to_rgba8(), vertices_colors))
+    let (w, h) = image.dimensions();
+    let lowpoly_image = draw_triangles(vertices_colors, w, h);
+
+    Ok(lowpoly_image)
 }
 
 fn diff_of_gaussians(gray_image: DynamicImage) -> Result<GrayImage, LowpolyError> {
@@ -143,8 +144,6 @@ fn add_samples_to_edge(points: &mut Vec<[u32; 2]>, n: u32, w: u32, h: u32) {
     let points_along_width = w * n / half_perimeter;
     let points_along_height = h * n / half_perimeter;
 
-    println!("{n}");
-
     // corners
     points.extend([[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1]]);
 
@@ -216,19 +215,21 @@ fn get_color_of_tri(
         .collect()
 }
 
-fn draw_triangles(
-    mut image: RgbaImage,
-    vertices_colors: Vec<(TriangleVertices, Color)>,
-) -> RgbaImage {
+fn draw_triangles(vertices_colors: Vec<(TriangleVertices, Color)>, w: u32, h: u32) -> RgbaImage {
+    use imageproc::drawing::draw_antialiased_polygon_mut;
+    use imageproc::point::Point;
+
+    let mut output = RgbaImage::new(w, h);
+
     for (poly, color) in vertices_colors {
         draw_antialiased_polygon_mut(
-            &mut image,
-            &poly.map(|e| Point::new(e[0] as i32, e[1] as i32))[..],
+            &mut output,
+            &poly.map(|e| Point::new((e[0] as f32) as i32, (e[1] as f32) as i32))[..],
             Rgba(color),
             imageproc::pixelops::interpolate,
-        )
+        );
     }
-    image
+    output
 }
 
 fn add_blur(image: DynamicImage, sigma: f64) -> Result<DynamicImage, LowpolyError> {
