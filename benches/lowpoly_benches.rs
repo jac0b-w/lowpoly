@@ -1,14 +1,16 @@
 use criterion::{BenchmarkId, Criterion, PlotConfiguration, criterion_group, criterion_main};
 use image::{GenericImageView, ImageReader};
-use lowpoly::{SampleSeed, lowpoly, lowpoly_seeded};
+use lowpoly::{SampleSeed, lowpoly, lowpoly_with_seed};
 use std::hint::black_box;
 use std::time::Duration;
 
 const LARGE_IMAGE_PATH: &str = "benches/large_image.png";
 
-
 pub fn large_image(c: &mut Criterion) {
-    let large_image = ImageReader::open(LARGE_IMAGE_PATH).unwrap().decode().unwrap();
+    let large_image = ImageReader::open(LARGE_IMAGE_PATH)
+        .unwrap()
+        .decode()
+        .unwrap();
     let (w, h) = large_image.dimensions();
 
     let mut group = c.benchmark_group(format!("Sample Sizes - Large Image ({w}x{h})"));
@@ -31,7 +33,10 @@ pub fn large_image(c: &mut Criterion) {
 }
 
 pub fn compare_seeds(c: &mut Criterion) {
-    let large_image = ImageReader::open(LARGE_IMAGE_PATH).unwrap().decode().unwrap();
+    let large_image = ImageReader::open(LARGE_IMAGE_PATH)
+        .unwrap()
+        .decode()
+        .unwrap();
     let (w, h) = large_image.dimensions();
 
     let n = 100_000;
@@ -39,17 +44,18 @@ pub fn compare_seeds(c: &mut Criterion) {
     let mut group = c.benchmark_group(format!("Seed Type - Large Image ({w}x{h})"));
     group.measurement_time(Duration::from_secs(120));
 
-    for seeding in vec![
-        SampleSeed::Random,
-        SampleSeed::Image,
-        SampleSeed::Custom(100),
-    ] {
+    for seeding in vec![SampleSeed::Random, SampleSeed::Custom(100)] {
         group.bench_with_input(
             BenchmarkId::from_parameter(format!("{:?}", seeding)),
             &seeding,
             |b, &s| {
                 b.iter(|| {
-                    lowpoly_seeded(black_box(large_image.clone()), black_box(n), black_box(s))
+                    lowpoly_with_seed(
+                        black_box(large_image.clone()),
+                        black_box(n),
+                        black_box(s),
+                        black_box(lowpoly::EdgePoints::Auto),
+                    )
                 })
             },
         );

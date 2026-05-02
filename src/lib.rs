@@ -22,6 +22,13 @@ pub enum SampleSeed {
     Custom(u64),
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum EdgePoints {
+    Auto,
+    Disabled,
+    Custom { count: u32 },
+}
+
 type TriangleVertices = [[f32; 2]; 3];
 type Color = [u8; 4];
 
@@ -35,18 +42,19 @@ pub fn seed_from_image(image: &DynamicImage) -> u64 {
 
 pub fn lowpoly(image: DynamicImage, n: u64) -> Result<RgbaImage, LowpolyError> {
     let seed = SampleSeed::Custom(seed_from_image(&image));
-    lowpoly_seeded(image, n, seed)
+    lowpoly_with_seed(image, n, seed, EdgePoints::Auto)
 }
 
-pub fn lowpoly_seeded(
+pub fn lowpoly_with_seed(
     image: DynamicImage,
     n: u64,
     seed: SampleSeed,
+    edge_mode: EdgePoints,
 ) -> Result<RgbaImage, LowpolyError> {
     let grayscale = DynamicImage::ImageLuma8(image.to_luma8());
     let diff_image = diff_of_gaussians(grayscale)?;
 
-    let points: Vec<[f32; 2]> = sample(&diff_image, n, seed)?
+    let points: Vec<[f32; 2]> = sample(&diff_image, n, seed, edge_mode)?
         .iter()
         .map(|[x, y]| [*x as f32, *y as f32])
         .collect();
@@ -82,7 +90,12 @@ fn diff_of_gaussians(gray_image: DynamicImage) -> Result<GrayImage, LowpolyError
     .expect("Should always be able to rebuild image from gray_image dimensions"))
 }
 
-fn sample(diff_image: &GrayImage, n: u64, seed: SampleSeed) -> Result<Vec<[u32; 2]>, LowpolyError> {
+fn sample(
+    diff_image: &GrayImage,
+    n: u64,
+    seed: SampleSeed,
+    edge_mode: EdgePoints,
+) -> Result<Vec<[u32; 2]>, LowpolyError> {
     use rand::{RngExt, SeedableRng, rngs::SmallRng, seq::index};
 
     let (w, h) = diff_image.dimensions();
@@ -112,13 +125,40 @@ fn sample(diff_image: &GrayImage, n: u64, seed: SampleSeed) -> Result<Vec<[u32; 
         })
         .collect();
 
-    // add corner samples
-    points.push([0, 0]);
-    points.push([w - 1, 0]);
-    points.push([0, h - 1]);
-    points.push([w - 1, h - 1]);
+    match edge_mode {
+        EdgePoints::Auto => {
+            let pixel_ratio = w * h / (2 * w + 2 * h);
+            let edge_n = (n as u32 / pixel_ratio).max(20);
+            add_samples_to_edge(&mut points, edge_n, w, h);
+        }
+        EdgePoints::Custom { count } => add_samples_to_edge(&mut points, count, w, h),
+        EdgePoints::Disabled => (),
+    }
 
     Ok(points)
+}
+
+fn add_samples_to_edge(points: &mut Vec<[u32; 2]>, n: u32, w: u32, h: u32) {
+    let half_perimeter = w + h;
+    let points_along_width = w * n / half_perimeter;
+    let points_along_height = h * n / half_perimeter;
+
+    println!("{n}");
+
+    // corners
+    points.extend([[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1]]);
+
+    // top and bottom edges
+    points.extend((1..points_along_width).flat_map(|x| {
+        let px = (w * x) / points_along_width;
+        [[px, 0], [px, h - 1]]
+    }));
+
+    // left and right edges
+    points.extend((1..points_along_height).flat_map(|y| {
+        let py = (h * y) / points_along_height;
+        [[0, py], [w - 1, py]]
+    }));
 }
 
 fn delaunay(samples: &[[f32; 2]]) -> DelaunayTriangulation<Point2<f32>> {
