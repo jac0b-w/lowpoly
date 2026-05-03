@@ -1,4 +1,5 @@
 use image::{DynamicImage, GenericImageView, GrayImage, Rgba, RgbaImage};
+use rand::{RngExt, rngs::SmallRng};
 use rayon::prelude::*;
 use spade::{DelaunayTriangulation, Point2, Triangulation};
 use thiserror::Error;
@@ -27,61 +28,90 @@ pub enum EdgePoints {
     Custom { count: u32 },
 }
 
-type TriangleVertices = [[f32; 2]; 3];
 type Color = [u8; 4];
 
-struct DensityGrid {
-    cell_density: Vec<u32>,
-    cell_color_acc: Vec<[u32; 4]>,
-    image_dimensions: (u32, u32),
-    pub grid_dimensions: (u32, u32),
+#[derive(Debug, Copy, Clone)]
+struct Point<T> {
+    x: T,
+    y: T,
 }
 
-impl DensityGrid {
-    fn new(image_dimensions: (u32, u32), grid_length: u32) -> Self {
-        let (iw, ih) = image_dimensions;
-        let (gw, gh) = (grid_length, grid_length * ih / iw);
-        let total_circles: usize = (gw * gh) as usize;
-
-        Self {
-            cell_density: vec![0; total_circles],
-            cell_color_acc: vec![[0; 4]; total_circles],
-            image_dimensions: (iw, ih),
-            grid_dimensions: (gw, gh),
+impl<T: Copy + 'static> Point<T> {
+    fn new(x: T, y: T) -> Self {
+        Self { x, y }
+    }
+    fn cast<U: Copy + 'static>(&self) -> Point<U>
+    where
+        T: num_traits::AsPrimitive<U>,
+    {
+        Point {
+            x: self.x.as_(),
+            y: self.y.as_(),
         }
     }
+}
 
-    fn get_index(&self, ix: u32, iy: u32) -> usize {
-        let gx = ix * self.grid_dimensions.0 / self.image_dimensions.0;
-        let gy = iy * self.grid_dimensions.1 / self.image_dimensions.1;
-        (gy * self.grid_dimensions.0 + gx) as usize
+impl<T: Copy + 'static> From<Point<T>> for [T; 2] {
+    fn from(p: Point<T>) -> Self {
+        [p.x, p.y]
     }
+}
 
-    fn accumulate(&mut self, ix: u32, iy: u32, color: Color) {
-        let index = self.get_index(ix, iy);
-        self.cell_density[index] += 1;
-        let acc = &mut self.cell_color_acc[index];
-        acc[0] += color[0] as u32;
-        acc[1] += color[1] as u32;
-        acc[2] += color[2] as u32;
-        acc[3] += color[3] as u32;
+impl<T: Copy + 'static> From<Point<T>> for (T, T) {
+    fn from(p: Point<T>) -> Self {
+        (p.x, p.y)
     }
+}
 
-    fn get_avg_color(&self, ix: u32, iy: u32) -> Color {
-        let index = self.get_index(ix, iy);
-        let density = self.cell_density[index];
-        let acc = self.cell_color_acc[index];
-        [
-            (acc[0] / density) as u8,
-            (acc[1] / density) as u8,
-            (acc[2] / density) as u8,
-            (acc[3] / density) as u8,
-        ]
+struct ColoredTriangle<T> {
+    vertices: [Point<T>; 3],
+    color: Color,
+}
+
+impl<T: Copy> ColoredTriangle<T> {
+    fn new(vertices: [Point<T>; 3], color: Color) -> Self {
+        Self { vertices, color }
     }
+    fn draw(&self, canvas: &mut RgbaImage)
+    where
+        T: num_traits::AsPrimitive<i32>,
+    {
+        imageproc::drawing::draw_antialiased_polygon_mut(
+            canvas,
+            &self
+                .vertices
+                .map(|v| imageproc::point::Point::new(v.x.as_(), v.y.as_())),
+            Rgba(self.color),
+            imageproc::pixelops::interpolate,
+        );
+    }
+}
 
-    fn get_density(&self, ix: u32, iy: u32) -> u32 {
-        let index = self.get_index(ix, iy);
-        self.cell_density[index]
+struct ColoredCircle<T> {
+    center: Point<T>,
+    radius: T,
+    color: Color,
+}
+
+impl<T: Copy> ColoredCircle<T> {
+    fn new(center: Point<T>, radius: T, color: Color) -> Self {
+        Self {
+            center,
+            radius,
+            color,
+        }
+    }
+    fn draw(&self, canvas: &mut RgbaImage)
+    where
+        T: num_traits::AsPrimitive<i32>,
+    {
+        use imageproc::drawing::draw_filled_circle_mut;
+        draw_filled_circle_mut(
+            canvas,
+            self.center.cast::<i32>().into(),
+            self.radius.as_(),
+            Rgba(self.color),
+        );
     }
 }
 
@@ -113,12 +143,15 @@ pub fn lowpoly_with_seed(
         .collect();
 
     let triangulation = delaunay(&points[..]);
-    let vertices_colors = get_color_of_tri(&image, &triangulation);
+    let colored_triangles = get_color_of_tri(&image, &triangulation);
 
     let (w, h) = image.dimensions();
-    let lowpoly_image = draw_triangles(vertices_colors, w, h);
+    let mut background = RgbaImage::new(w, h);
+    for triangle in colored_triangles {
+        triangle.draw(&mut background);
+    }
 
-    Ok(lowpoly_image)
+    Ok(background)
 }
 
 pub fn circular_seeded(
@@ -135,45 +168,63 @@ pub fn circular_seeded(
         .map(|[x, y]| [*x as f32, *y as f32])
         .collect();
 
-    let mut density = DensityGrid::new(image.dimensions(), 200);
+    let triangulation = delaunay(&points[..]);
+    let vertices_colors = get_color_of_tri(&image, &triangulation);
 
-    for [ix, iy] in points.clone() {
-        let color: [u8; 4] = image.get_pixel(ix as u32, iy as u32).0;
-        density.accumulate(ix as u32, iy as u32, color);
-    }
-
-    let (w, h) = image.dimensions();
-
-    let colors: Vec<_> = image.pixels().map(|(_, _, c)| {c}).collect();
+    let colors: Vec<_> = image.pixels().map(|(_, _, c)| c).collect();
     let mean_color = avg_color(&colors[..]);
 
-    let background = RgbaImage::from_pixel(w, h, Rgba(mean_color));
-    let mosaic = draw_cirlces(density, points, background);
+    let (w, h) = image.dimensions();
+    let mut background = RgbaImage::from_pixel(w, h, Rgba(mean_color));
 
-    Ok(mosaic)
-}
+    let mut circles: Vec<ColoredCircle<_>> = vertices_colors
+        .into_iter()
+        .map(|colored_triangle| {
+            let [sx, sy] = colored_triangle
+                .vertices
+                .iter()
+                .fold([0.0, 0.0], |acc, v| [acc[0] + v.x, acc[1] + v.y]);
 
-fn draw_cirlces(density: DensityGrid, samples: Vec<[f32; 2]>, mut background: RgbaImage) -> RgbaImage {
-    use imageproc::drawing::draw_filled_circle_mut;
+            let center = [sx / 3.0, sy / 3.0];
 
-    let A = background.dimensions().0 * background.dimensions().1;
-    let grid_cells = density.grid_dimensions.0 * density.grid_dimensions.1;
-    let A_Ng = A as f32 / grid_cells as f32;
+            let mut distances: Vec<f32> = colored_triangle
+                .vertices
+                .iter()
+                .map(|Point { x, y }| f32::hypot(center[0] - x, center[1] - y))
+                .collect();
+            distances.sort_by(f32::total_cmp);
+            let radius = distances[1];
 
-    for [x, y] in samples {
-        let rho = density.get_density(x as u32, y as u32) as f32;
-        let r = 2*(A_Ng / rho).powf(0.6) as i32;
+            ColoredCircle::new(
+                Point::new(center[0], center[1]),
+                radius,
+                colored_triangle.color,
+            )
+        })
+        .collect();
 
-        draw_filled_circle_mut(
-            &mut background,
-            (x as i32, y as i32),
-            r,
-            Rgba(density.get_avg_color(x as u32, y as u32)),
-        )
+    circles.sort_by(|a, b| b.radius.total_cmp(&a.radius));
+
+    let noise = 10;
+
+    add_noise(&mut circles, noise);
+
+    for circle in circles {
+        circle.draw(&mut background);
     }
-    background
+
+    Ok(background)
 }
 
+fn add_noise<T>(v: &mut Vec<T>, max_displacement: usize) {
+    let mut rng: SmallRng = rand::make_rng();
+    let len = v.len();
+
+    for i in 0..len {
+        let j = rng.random_range(i..=(i + max_displacement).min(len - 1));
+        v.swap(i, j);
+    }
+}
 
 fn diff_of_gaussians(gray_image: DynamicImage) -> Result<GrayImage, LowpolyError> {
     let (width, height) = gray_image.dimensions();
@@ -277,7 +328,7 @@ fn delaunay(samples: &[[f32; 2]]) -> DelaunayTriangulation<Point2<f32>> {
 fn get_color_of_tri(
     image: &DynamicImage,
     tri: &DelaunayTriangulation<Point2<f32>>,
-) -> Vec<(TriangleVertices, Color)> {
+) -> Vec<ColoredTriangle<f32>> {
     let (width, height) = image.dimensions();
     tri.inner_faces()
         .collect::<Vec<_>>()
@@ -316,29 +367,12 @@ fn get_color_of_tri(
                 .map(|(x, y)| image.get_pixel(x, y))
                 .collect();
 
-            (
-                verts.map(|v| [v.position().x, v.position().y]),
-                avg_color(&pixels),
+            ColoredTriangle::new(
+                positions.map(|v| Point::new(v.x, v.y)),
+                avg_color(&pixels[..]),
             )
         })
         .collect()
-}
-
-fn draw_triangles(vertices_colors: Vec<(TriangleVertices, Color)>, w: u32, h: u32) -> RgbaImage {
-    use imageproc::drawing::draw_antialiased_polygon_mut;
-    use imageproc::point::Point;
-
-    let mut output = RgbaImage::new(w, h);
-
-    for (poly, color) in vertices_colors {
-        draw_antialiased_polygon_mut(
-            &mut output,
-            &poly.map(|e| Point::new((e[0] as f32) as i32, (e[1] as f32) as i32))[..],
-            Rgba(color),
-            imageproc::pixelops::interpolate,
-        );
-    }
-    output
 }
 
 fn add_blur(image: DynamicImage, sigma: f64) -> Result<DynamicImage, LowpolyError> {

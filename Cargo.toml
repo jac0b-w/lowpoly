@@ -11,6 +11,7 @@ rand = "0.10"
 rayon = "1.10"
 spade = "2.0"
 thiserror = "2.0"
+num-traits = "0.2"
 
 
 [dev-dependencies]
