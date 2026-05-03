@@ -1,5 +1,5 @@
 use image::{DynamicImage, GenericImageView, GrayImage, Rgba, RgbaImage};
-use rand::{RngExt, rngs::SmallRng};
+use rand::{RngExt, rngs::SmallRng, SeedableRng, seq::index};
 use rayon::prelude::*;
 use spade::{DelaunayTriangulation, Point2, Triangulation};
 use thiserror::Error;
@@ -9,16 +9,36 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum LowpolyError {
     #[error("Expected n in range [4, {1}], got {0}")]
-    NSamplesError(u64, u64),
+    NSamplesError(u32, u32),
 
     #[error("Error blurring image for edge detection")]
     BlurError,
+}
+
+pub enum Style {
+    Triangular,
+    Circular {noise: f32}
+}
+
+pub struct SamplingParams {
+    pub seed: SampleSeed,
+    pub edge_mode: EdgePoints,
+}
+
+impl Default for SamplingParams {
+    fn default() -> Self {
+        Self {
+            seed: SampleSeed::Image,
+            edge_mode: EdgePoints::Auto,
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
 pub enum SampleSeed {
     Random,
     Custom(u64),
+    Image
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -123,21 +143,28 @@ pub fn seed_from_image(image: &DynamicImage) -> u64 {
     hasher.finish()
 }
 
-pub fn lowpoly(image: DynamicImage, n: u64) -> Result<RgbaImage, LowpolyError> {
-    let seed = SampleSeed::Custom(seed_from_image(&image));
-    lowpoly_with_seed(image, n, seed, EdgePoints::Auto)
+pub fn geometrize(image: DynamicImage, style: Style, n: u32, sampling: SamplingParams) -> Result<RgbaImage, LowpolyError> {
+    let rng = match sampling.seed {
+        SampleSeed::Random => rand::make_rng(),
+        SampleSeed::Custom(state) => SmallRng::seed_from_u64(state),
+        SampleSeed::Image => SmallRng::seed_from_u64(seed_from_image(&image))
+    };
+    match style {
+        Style::Triangular => lowpoly(image, n, rng, sampling.edge_mode),
+        Style::Circular { noise } => pointillist(image, n,noise, rng, sampling.edge_mode)
+    }
 }
 
-pub fn lowpoly_with_seed(
+fn lowpoly(
     image: DynamicImage,
-    n: u64,
-    seed: SampleSeed,
+    n: u32,
+    mut rng: SmallRng,
     edge_mode: EdgePoints,
 ) -> Result<RgbaImage, LowpolyError> {
     let grayscale = DynamicImage::ImageLuma8(image.to_luma8());
     let diff_image = diff_of_gaussians(grayscale)?;
 
-    let points: Vec<[f32; 2]> = sample(&diff_image, n, seed, edge_mode)?
+    let points: Vec<[f32; 2]> = sample(&diff_image, n, &mut rng, edge_mode)?
         .iter()
         .map(|[x, y]| [*x as f32, *y as f32])
         .collect();
@@ -154,16 +181,17 @@ pub fn lowpoly_with_seed(
     Ok(background)
 }
 
-pub fn circular_seeded(
+fn pointillist(
     image: DynamicImage,
-    n: u64,
-    seed: SampleSeed,
+    n: u32,
+    noise: f32,
+    mut rng: SmallRng,
     edge_mode: EdgePoints,
 ) -> Result<RgbaImage, LowpolyError> {
     let grayscale = DynamicImage::ImageLuma8(image.to_luma8());
     let diff_image = diff_of_gaussians(grayscale)?;
 
-    let points: Vec<[f32; 2]> = sample(&diff_image, n, seed, edge_mode)?
+    let points: Vec<[f32; 2]> = sample(&diff_image, n, &mut rng, edge_mode)?
         .iter()
         .map(|[x, y]| [*x as f32, *y as f32])
         .collect();
@@ -205,9 +233,7 @@ pub fn circular_seeded(
 
     circles.sort_by(|a, b| b.radius.total_cmp(&a.radius));
 
-    let noise = 10;
-
-    add_noise(&mut circles, noise);
+    add_noise(&mut circles, noise, &mut rng);
 
     for circle in circles {
         circle.draw(&mut background);
@@ -216,9 +242,9 @@ pub fn circular_seeded(
     Ok(background)
 }
 
-fn add_noise<T>(v: &mut Vec<T>, max_displacement: usize) {
-    let mut rng: SmallRng = rand::make_rng();
+fn add_noise<T>(v: &mut Vec<T>, displacement_fraction: f32, rng: &mut SmallRng) {
     let len = v.len();
+    let max_displacement = (len as f32 * displacement_fraction) as usize;
 
     for i in 0..len {
         let j = rng.random_range(i..=(i + max_displacement).min(len - 1));
@@ -253,23 +279,16 @@ fn diff_of_gaussians(gray_image: DynamicImage) -> Result<GrayImage, LowpolyError
 
 fn sample(
     diff_image: &GrayImage,
-    n: u64,
-    seed: SampleSeed,
+    n: u32,
+    mut rng: &mut SmallRng,
     edge_mode: EdgePoints,
 ) -> Result<Vec<[u32; 2]>, LowpolyError> {
-    use rand::{RngExt, SeedableRng, rngs::SmallRng, seq::index};
-
     let (w, h) = diff_image.dimensions();
 
-    let num_pixels = w as u64 * h as u64;
+    let num_pixels = w as u32 * h as u32;
     if !(4..num_pixels).contains(&n) {
         return Err(LowpolyError::NSamplesError(n, num_pixels));
     }
-
-    let mut rng: SmallRng = match seed {
-        SampleSeed::Random => rand::make_rng(),
-        SampleSeed::Custom(state) => SmallRng::seed_from_u64(state),
-    };
 
     let mut points: Vec<[u32; 2]> = index::sample(&mut rng, num_pixels as usize, n as usize - 4)
         .into_iter()
@@ -389,6 +408,7 @@ fn add_blur(image: DynamicImage, sigma: f64) -> Result<DynamicImage, LowpolyErro
 
 fn avg_color(pixels: &[Rgba<u8>]) -> Color {
     let count = pixels.len() as u64;
+    if count == 0 {return [0, 0, 0, 255]}
     pixels
         .iter()
         .fold([0u64; 4], |mut acc, px| {
