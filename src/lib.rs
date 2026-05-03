@@ -1,5 +1,5 @@
 use image::{DynamicImage, GenericImageView, GrayImage, Rgba, RgbaImage};
-use rand::{RngExt, rngs::SmallRng, SeedableRng, seq::index};
+use rand::{RngExt, SeedableRng, rngs::SmallRng, seq::index};
 use rayon::prelude::*;
 use spade::{DelaunayTriangulation, Point2, Triangulation};
 use thiserror::Error;
@@ -8,17 +8,20 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum LowpolyError {
-    #[error("Expected n in range [4, {1}], got {0}")]
-    NSamplesError(u32, u32),
+    #[error("Expected n in range [10, {num_pixels}], got {n}")]
+    NSamplesError { num_pixels: u32, n: u32 },
 
     #[error("Error blurring image for edge detection")]
     BlurError,
+
+    #[error("Expected noise in range [0.0, 1.0] got {0}")]
+    NoiseError(f32),
 }
 
 #[derive(Debug, Clone)]
 pub enum Style {
     Lowpoly,
-    Pointillist {noise: f32}
+    Pointillist { noise: f32 },
 }
 
 pub struct SamplingParams {
@@ -39,7 +42,7 @@ impl Default for SamplingParams {
 pub enum SampleSeed {
     Random,
     Custom(u64),
-    Image
+    Image,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -144,15 +147,27 @@ pub fn seed_from_image(image: &DynamicImage) -> u64 {
     hasher.finish()
 }
 
-pub fn geometrize(image: DynamicImage, style: Style, n: u32, sampling: SamplingParams) -> Result<RgbaImage, LowpolyError> {
+pub fn geometrize(
+    image: DynamicImage,
+    style: Style,
+    n: u32,
+    sampling: SamplingParams,
+) -> Result<RgbaImage, LowpolyError> {
+    let (w, h) = image.dimensions();
+    let pixels = w * h;
+
+    if !(10..=(w * h)).contains(&n) {
+        return Err(LowpolyError::NSamplesError { num_pixels: pixels, n });
+    }
+
     let rng = match sampling.seed {
         SampleSeed::Random => rand::make_rng(),
         SampleSeed::Custom(state) => SmallRng::seed_from_u64(state),
-        SampleSeed::Image => SmallRng::seed_from_u64(seed_from_image(&image))
+        SampleSeed::Image => SmallRng::seed_from_u64(seed_from_image(&image)),
     };
     match style {
         Style::Lowpoly => lowpoly(image, n, rng, sampling.edge_mode),
-        Style::Pointillist { noise } => pointillist(image, n,noise, rng, sampling.edge_mode)
+        Style::Pointillist { noise } => pointillist(image, n, noise, rng, sampling.edge_mode),
     }
 }
 
@@ -189,6 +204,10 @@ fn pointillist(
     mut rng: SmallRng,
     edge_mode: EdgePoints,
 ) -> Result<RgbaImage, LowpolyError> {
+    if !(0.0..=1.0).contains(&noise) {
+        return Err(LowpolyError::NoiseError(noise))
+    }
+
     let grayscale = DynamicImage::ImageLuma8(image.to_luma8());
     let diff_image = diff_of_gaussians(grayscale)?;
 
@@ -245,6 +264,10 @@ fn pointillist(
 
 fn add_noise<T>(v: &mut Vec<T>, displacement_fraction: f32, rng: &mut SmallRng) {
     let len = v.len();
+    if len == 0 {
+        return;
+    }
+
     let max_displacement = (len as f32 * displacement_fraction) as usize;
 
     for i in 0..len {
@@ -285,11 +308,7 @@ fn sample(
     edge_mode: EdgePoints,
 ) -> Result<Vec<[u32; 2]>, LowpolyError> {
     let (w, h) = diff_image.dimensions();
-
     let num_pixels = w as u32 * h as u32;
-    if !(4..num_pixels).contains(&n) {
-        return Err(LowpolyError::NSamplesError(n, num_pixels));
-    }
 
     let mut points: Vec<[u32; 2]> = index::sample(&mut rng, num_pixels as usize, n as usize - 4)
         .into_iter()
@@ -409,7 +428,9 @@ fn add_blur(image: DynamicImage, sigma: f64) -> Result<DynamicImage, LowpolyErro
 
 fn avg_color(pixels: &[Rgba<u8>]) -> Color {
     let count = pixels.len() as u64;
-    if count == 0 {return [0, 0, 0, 255]}
+    if count == 0 {
+        return [0, 0, 0, 255];
+    }
     pixels
         .iter()
         .fold([0u64; 4], |mut acc, px| {
