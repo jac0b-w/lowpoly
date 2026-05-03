@@ -1,5 +1,5 @@
 [package]
-name = "lowpoly"
+name = "geometrize"
 version = "0.1.0"
 edition = "2024"
 
@@ -15,13 +15,13 @@ num-traits = "0.2"
 
 
 [dev-dependencies]
+image = {version = "0.25.8", default-features = false, features = ["png"]}
 criterion = "0.8"
 
 [[bench]]
-name = "lowpoly_benches"
+name = "benchmarks"
 harness = false
 
 [lib]
-name = "lowpoly"
 path = "src/lib.rs"
 crate-type = ["rlib"]

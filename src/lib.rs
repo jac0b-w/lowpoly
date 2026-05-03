@@ -15,9 +15,10 @@ pub enum LowpolyError {
     BlurError,
 }
 
+#[derive(Debug, Clone)]
 pub enum Style {
-    Triangular,
-    Circular {noise: f32}
+    Lowpoly,
+    Pointillist {noise: f32}
 }
 
 pub struct SamplingParams {
@@ -82,7 +83,7 @@ impl<T: Copy + 'static> From<Point<T>> for (T, T) {
         (p.x, p.y)
     }
 }
-
+#[derive(Debug, Clone)]
 struct ColoredTriangle<T> {
     vertices: [Point<T>; 3],
     color: Color,
@@ -106,7 +107,7 @@ impl<T: Copy> ColoredTriangle<T> {
         );
     }
 }
-
+#[derive(Debug, Clone)]
 struct ColoredCircle<T> {
     center: Point<T>,
     radius: T,
@@ -150,8 +151,8 @@ pub fn geometrize(image: DynamicImage, style: Style, n: u32, sampling: SamplingP
         SampleSeed::Image => SmallRng::seed_from_u64(seed_from_image(&image))
     };
     match style {
-        Style::Triangular => lowpoly(image, n, rng, sampling.edge_mode),
-        Style::Circular { noise } => pointillist(image, n,noise, rng, sampling.edge_mode)
+        Style::Lowpoly => lowpoly(image, n, rng, sampling.edge_mode),
+        Style::Pointillist { noise } => pointillist(image, n,noise, rng, sampling.edge_mode)
     }
 }
 
