@@ -3,6 +3,7 @@ use rand::{RngExt, SeedableRng, rngs::SmallRng, seq::index};
 use rayon::prelude::*;
 use spade::{DelaunayTriangulation, Point2, Triangulation};
 use thiserror::Error;
+use tiny_skia::{Paint, PathBuilder, Pixmap, Transform};
 
 // https://cosmiccoding.com.au/tutorials/lowpoly/
 
@@ -20,7 +21,7 @@ pub enum LowpolyError {
 
 #[derive(Debug, Clone)]
 pub enum Style {
-    Lowpoly,
+    Lowpoly { anti_alias_pass: bool },
     Pointillist { noise: f32 },
 }
 
@@ -55,107 +56,100 @@ pub enum EdgePoints {
 type Color = [u8; 4];
 
 #[derive(Debug, Copy, Clone)]
-struct Point<T> {
-    x: T,
-    y: T,
+struct Point {
+    x: f32,
+    y: f32,
 }
 
-impl<T: Copy + 'static> Point<T> {
-    fn new(x: T, y: T) -> Self {
+impl Point {
+    fn new(x: f32, y: f32) -> Self {
         Self { x, y }
     }
-    fn cast<U: Copy + 'static>(&self) -> Point<U>
-    where
-        T: num_traits::AsPrimitive<U>,
-    {
-        Point {
-            x: self.x.as_(),
-            y: self.y.as_(),
-        }
-    }
 }
 
-impl<T: Copy + 'static> From<Point<T>> for [T; 2] {
-    fn from(p: Point<T>) -> Self {
-        [p.x, p.y]
-    }
-}
-
-impl<T: Copy + 'static> From<Point<T>> for (T, T) {
-    fn from(p: Point<T>) -> Self {
-        (p.x, p.y)
-    }
-}
 #[derive(Debug, Clone)]
-struct ColoredTriangle<T> {
-    vertices: [Point<T>; 3],
+struct ColoredTriangle {
+    vertices: [Point; 3],
     color: Color,
 }
 
-impl<T: Copy> ColoredTriangle<T> {
-    fn new(vertices: [Point<T>; 3], color: Color) -> Self {
+impl ColoredTriangle {
+    fn new(vertices: [Point; 3], color: Color) -> Self {
         Self { vertices, color }
     }
-    fn draw(&self, canvas: &mut RgbaImage)
-    where
-        T: num_traits::AsPrimitive<i32>,
-    {
-        imageproc::drawing::draw_antialiased_polygon_mut(
-            canvas,
-            &self
-                .vertices
-                .map(|v| imageproc::point::Point::new(v.x.as_(), v.y.as_())),
-            Rgba(self.color),
-            imageproc::pixelops::interpolate,
+}
+
+impl ColoredTriangle {
+    fn draw(&self, canvas: &mut Pixmap, anti_alias: bool) {
+        let [r, g, b, a] = self.color;
+        let mut paint = Paint {
+            anti_alias,
+            ..Paint::default()
+        };
+        paint.set_color_rgba8(r, g, b, a);
+        let mut path_builder = PathBuilder::new();
+
+        let [a, b, c] = self.vertices;
+
+        // build triangle
+        path_builder.move_to(a.x, a.y);
+        path_builder.line_to(b.x, b.y);
+        path_builder.line_to(c.x, c.y);
+        path_builder.close();
+
+        let path = path_builder.finish().unwrap();
+
+        canvas.fill_path(
+            &path,
+            &paint,
+            tiny_skia::FillRule::Winding,
+            Transform::default(),
+            None,
         );
     }
 }
+
 #[derive(Debug, Clone)]
-struct ColoredCircle<T> {
-    center: Point<T>,
-    radius: T,
+struct ColoredCircle {
+    center: Point,
+    radius: f32,
     color: Color,
 }
 
-impl<T: Copy> ColoredCircle<T> {
-    fn draw(&self, canvas: &mut RgbaImage)
-    where
-        T: num_traits::AsPrimitive<i32>,
-    {
-        use imageproc::drawing::draw_filled_circle_mut;
-        draw_filled_circle_mut(
-            canvas,
-            self.center.cast::<i32>().into(),
-            self.radius.as_(),
-            Rgba(self.color),
-        );
+impl ColoredCircle {
+    fn draw(&self, canvas: &mut Pixmap) {
+        let [r, g, b, a] = self.color;
+        let mut paint = Paint::default();
+        paint.set_color_rgba8(r, g, b, a);
+        let path = PathBuilder::from_circle(self.center.x, self.center.y, self.radius).unwrap();
+        canvas.fill_path(
+            &path,
+            &paint,
+            tiny_skia::FillRule::Winding,
+            Transform::default(),
+            None,
+        )
     }
 }
 
-impl<T> From<ColoredTriangle<T>> for ColoredCircle<T>
-where
-    T: Copy + num_traits::AsPrimitive<f32> + num_traits::FromPrimitive,
-{
-    fn from(ctriangle: ColoredTriangle<T>) -> Self {
+impl From<ColoredTriangle> for ColoredCircle {
+    fn from(ctriangle: ColoredTriangle) -> Self {
         let [v1, v2, v3] = ctriangle.vertices;
 
         // calculate centroid of triangle
-        let cx = (v1.x.as_() + v2.x.as_() + v3.x.as_()) / 3.0;
-        let cy = (v1.y.as_() + v2.y.as_() + v3.y.as_()) / 3.0;
+        let cx = (v1.x + v2.x + v3.x) / 3.0;
+        let cy = (v1.y + v2.y + v3.y) / 3.0;
 
         // calculate distances from centriod to vertices
-        let [a, b, c] = [v1, v2, v3].map(|Point { x, y }| f32::hypot(cx - x.as_(), cy - y.as_()));
-        
+        let [a, b, c] = [v1, v2, v3].map(|Point { x, y }| f32::hypot(cx - x, cy - y));
+
         // +0.5 to account for any rounding down i.e. casts
         // this ensures that the circles always cover the full image.
         let radius = a.max(b).max(c) + 0.5;
 
         ColoredCircle {
-            center: Point {
-                x: T::from_f32(cx).unwrap(),
-                y: T::from_f32(cy).unwrap(),
-            },
-            radius: T::from_f32(radius).unwrap(),
+            center: Point { x: cx, y: cy },
+            radius: radius,
             color: ctriangle.color,
         }
     }
@@ -191,7 +185,9 @@ pub fn geometrize(
         SampleSeed::Image => SmallRng::seed_from_u64(seed_from_image(&image)),
     };
     match style {
-        Style::Lowpoly => lowpoly(image, n, rng, sampling.edge_mode),
+        Style::Lowpoly { anti_alias_pass } => {
+            lowpoly(image, n, anti_alias_pass, rng, sampling.edge_mode)
+        }
         Style::Pointillist { noise } => pointillist(image, n, noise, rng, sampling.edge_mode),
     }
 }
@@ -199,6 +195,7 @@ pub fn geometrize(
 fn lowpoly(
     image: DynamicImage,
     n: u32,
+    anti_alias_pass: bool,
     mut rng: SmallRng,
     edge_mode: EdgePoints,
 ) -> Result<RgbaImage, LowpolyError> {
@@ -214,12 +211,21 @@ fn lowpoly(
     let colored_triangles = get_color_of_tri(&image, &triangulation);
 
     let (w, h) = image.dimensions();
-    let mut background = RgbaImage::from_pixel(w, h, Rgba([0, 0, 0, 0]));
-    for triangle in colored_triangles {
-        triangle.draw(&mut background);
+    let mut canvas = Pixmap::new(w, h).unwrap();
+    for triangle in &colored_triangles {
+        triangle.draw(&mut canvas, false);
+    }
+    // add an antialiasing pass
+    if anti_alias_pass {
+        for triangle in &colored_triangles {
+            triangle.draw(&mut canvas, true);
+        }
     }
 
-    Ok(background)
+    let output =
+        RgbaImage::from_raw(canvas.width(), canvas.height(), canvas.data().to_vec()).unwrap();
+
+    Ok(output)
 }
 
 fn pointillist(
@@ -245,9 +251,8 @@ fn pointillist(
     let vertices_colors = get_color_of_tri(&image, &triangulation);
 
     let (w, h) = image.dimensions();
-    let mut background = RgbaImage::from_pixel(w, h, Rgba([0, 0, 0, 0]));
 
-    let mut circles: Vec<ColoredCircle<_>> = vertices_colors
+    let mut circles: Vec<ColoredCircle> = vertices_colors
         .into_iter()
         .map(|colored_triangle| colored_triangle.into())
         .collect();
@@ -256,11 +261,15 @@ fn pointillist(
 
     add_noise(&mut circles, noise, &mut rng);
 
+    let mut canvas = Pixmap::new(w, h).unwrap();
     for circle in circles {
-        circle.draw(&mut background);
+        circle.draw(&mut canvas);
     }
 
-    Ok(background)
+    let output =
+        RgbaImage::from_raw(canvas.width(), canvas.height(), canvas.data().to_vec()).unwrap();
+
+    Ok(output)
 }
 
 fn add_noise<T>(v: &mut Vec<T>, displacement_fraction: f32, rng: &mut SmallRng) {
@@ -368,7 +377,7 @@ fn delaunay(samples: &[[f32; 2]]) -> DelaunayTriangulation<Point2<f32>> {
 fn get_color_of_tri(
     image: &DynamicImage,
     tri: &DelaunayTriangulation<Point2<f32>>,
-) -> Vec<ColoredTriangle<f32>> {
+) -> Vec<ColoredTriangle> {
     let (width, height) = image.dimensions();
     tri.inner_faces()
         .par_bridge()

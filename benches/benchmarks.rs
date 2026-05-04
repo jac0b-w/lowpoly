@@ -42,7 +42,7 @@ fn bench_large_image(c: &mut Criterion, style: Style) {
 }
 
 pub fn large_image_lowpoly(c: &mut Criterion) {
-    bench_large_image(c, Style::Lowpoly);
+    bench_large_image(c, Style::Lowpoly {anti_alias_pass: false});
 }
 
 pub fn large_image_pointillist(c: &mut Criterion) {
