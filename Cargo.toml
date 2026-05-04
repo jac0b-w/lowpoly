@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-image = {version = "0.25.8", default-features = false}
-imageproc = {version = "0.26", default-features = false}
+image = { version = "0.25.8", default-features = false }
+imageproc = { version = "0.26", default-features = false }
 libblur = { version = "0.23", default-features = false, features = ["image"] }
 rand = "0.10"
 rayon = "1.10"
@@ -13,10 +13,14 @@ spade = "2.0"
 thiserror = "2.0"
 num-traits = "0.2"
 
-
 [dev-dependencies]
-image = {version = "0.25.8", default-features = false, features = ["png"]}
+image = "0.25.8"
 criterion = "0.8"
+sanitize-filename = "0.6.0"
+reqwest = { version = "0.13.3", features = ["blocking"] }
+
+[profile.dev]
+opt-level = 3
 
 [[bench]]
 name = "benchmarks"
