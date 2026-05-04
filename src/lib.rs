@@ -162,10 +162,11 @@ where
 }
 
 pub fn seed_from_image(image: &DynamicImage) -> u64 {
-    use std::hash::{DefaultHasher, Hash, Hasher};
+    use rustc_hash::FxHasher;
+    use std::hash::Hasher;
 
-    let mut hasher = DefaultHasher::new();
-    image.as_bytes().hash(&mut hasher);
+    let mut hasher = FxHasher::with_seed(1);
+    hasher.write(image.as_bytes());
     hasher.finish()
 }
 

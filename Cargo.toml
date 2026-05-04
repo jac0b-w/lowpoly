@@ -12,6 +12,7 @@ rayon = "1.10"
 spade = "2.0"
 thiserror = "2.0"
 num-traits = "0.2"
+rustc-hash = "2.1"
 
 [dev-dependencies]
 image = "0.25.8"
