@@ -118,13 +118,6 @@ struct ColoredCircle<T> {
 }
 
 impl<T: Copy> ColoredCircle<T> {
-    fn new(center: Point<T>, radius: T, color: Color) -> Self {
-        Self {
-            center,
-            radius,
-            color,
-        }
-    }
     fn draw(&self, canvas: &mut RgbaImage)
     where
         T: num_traits::AsPrimitive<i32>,
@@ -136,6 +129,35 @@ impl<T: Copy> ColoredCircle<T> {
             self.radius.as_(),
             Rgba(self.color),
         );
+    }
+}
+
+impl<T> From<ColoredTriangle<T>> for ColoredCircle<T>
+where
+    T: Copy + num_traits::AsPrimitive<f32> + num_traits::FromPrimitive,
+{
+    fn from(ctriangle: ColoredTriangle<T>) -> Self {
+        let [v1, v2, v3] = ctriangle.vertices;
+
+        // calculate centroid of triangle
+        let cx = (v1.x.as_() + v2.x.as_() + v3.x.as_()) / 3.0;
+        let cy = (v1.y.as_() + v2.y.as_() + v3.y.as_()) / 3.0;
+
+        // calculate distances from centriod to vertices
+        let [a, b, c] = [v1, v2, v3].map(|Point { x, y }| f32::hypot(cx - x.as_(), cy - y.as_()));
+        
+        // +0.5 to account for any rounding down i.e. casts
+        // this ensures that the circles always cover the full image.
+        let radius = a.max(b).max(c) + 0.5;
+
+        ColoredCircle {
+            center: Point {
+                x: T::from_f32(cx).unwrap(),
+                y: T::from_f32(cy).unwrap(),
+            },
+            radius: T::from_f32(radius).unwrap(),
+            color: ctriangle.color,
+        }
     }
 }
 
@@ -157,7 +179,10 @@ pub fn geometrize(
     let pixels = w * h;
 
     if !(10..=(w * h)).contains(&n) {
-        return Err(LowpolyError::NSamplesError { num_pixels: pixels, n });
+        return Err(LowpolyError::NSamplesError {
+            num_pixels: pixels,
+            n,
+        });
     }
 
     let rng = match sampling.seed {
@@ -189,7 +214,7 @@ fn lowpoly(
     let colored_triangles = get_color_of_tri(&image, &triangulation);
 
     let (w, h) = image.dimensions();
-    let mut background = RgbaImage::new(w, h);
+    let mut background = RgbaImage::from_pixel(w, h, Rgba([0, 0, 0, 0]));
     for triangle in colored_triangles {
         triangle.draw(&mut background);
     }
@@ -205,7 +230,7 @@ fn pointillist(
     edge_mode: EdgePoints,
 ) -> Result<RgbaImage, LowpolyError> {
     if !(0.0..=1.0).contains(&noise) {
-        return Err(LowpolyError::NoiseError(noise))
+        return Err(LowpolyError::NoiseError(noise));
     }
 
     let grayscale = DynamicImage::ImageLuma8(image.to_luma8());
@@ -219,36 +244,12 @@ fn pointillist(
     let triangulation = delaunay(&points[..]);
     let vertices_colors = get_color_of_tri(&image, &triangulation);
 
-    let colors: Vec<_> = image.pixels().map(|(_, _, c)| c).collect();
-    let mean_color = avg_color(&colors[..]);
-
     let (w, h) = image.dimensions();
-    let mut background = RgbaImage::from_pixel(w, h, Rgba(mean_color));
+    let mut background = RgbaImage::from_pixel(w, h, Rgba([0, 0, 0, 0]));
 
     let mut circles: Vec<ColoredCircle<_>> = vertices_colors
         .into_iter()
-        .map(|colored_triangle| {
-            let [sx, sy] = colored_triangle
-                .vertices
-                .iter()
-                .fold([0.0, 0.0], |acc, v| [acc[0] + v.x, acc[1] + v.y]);
-
-            let center = [sx / 3.0, sy / 3.0];
-
-            let mut distances: Vec<f32> = colored_triangle
-                .vertices
-                .iter()
-                .map(|Point { x, y }| f32::hypot(center[0] - x, center[1] - y))
-                .collect();
-            distances.sort_by(f32::total_cmp);
-            let radius = distances[1];
-
-            ColoredCircle::new(
-                Point::new(center[0], center[1]),
-                radius,
-                colored_triangle.color,
-            )
-        })
+        .map(|colored_triangle| colored_triangle.into())
         .collect();
 
     circles.sort_by(|a, b| b.radius.total_cmp(&a.radius));
@@ -370,8 +371,7 @@ fn get_color_of_tri(
 ) -> Vec<ColoredTriangle<f32>> {
     let (width, height) = image.dimensions();
     tri.inner_faces()
-        .collect::<Vec<_>>()
-        .par_iter()
+        .par_bridge()
         .map(|face| {
             let verts = face.vertices();
             let positions = verts.map(|v| v.position());
