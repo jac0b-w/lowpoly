@@ -168,7 +168,6 @@ pub fn seed_from_image(image: &DynamicImage) -> u64 {
     let mut hasher = FxHasher::with_seed(1);
     hasher.write(image.as_bytes());
     let seed = hasher.finish();
-    println!("{:?}", seed);
     seed
 }
 
@@ -258,7 +257,6 @@ fn pointillist(
     circles.sort_by(|a, b| b.radius.total_cmp(&a.radius));
 
 
-    println!("{:?}", rng.random::<f32>());
     add_noise(&mut circles, noise, &mut rng);
 
     for circle in circles {
@@ -375,8 +373,8 @@ fn get_color_of_tri(
     tri: &DelaunayTriangulation<Point2<f32>>,
 ) -> Vec<ColoredTriangle<f32>> {
     let (width, height) = image.dimensions();
-    tri.inner_faces()
-        .par_bridge()
+    let inner_faces: Vec<_> = tri.inner_faces().collect();
+    inner_faces.par_iter()
         .map(|face| {
             let verts = face.vertices();
             let positions = verts.map(|v| v.position());
