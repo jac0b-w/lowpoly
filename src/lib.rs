@@ -398,37 +398,37 @@ impl Triangle {
     // Is the point inside of the triangle
     fn contains(&self, x: f32, y: f32) -> bool {
         let [a, b, c] = &self.0;
-        let sign = |p1: (f32, f32), p2: (f32, f32), p3: (f32, f32)| {
-            (p1.0 - p3.0) * (p2.1 - p3.1) - (p2.0 - p3.0) * (p1.1 - p3.1)
-        };
-        let d1 = sign((x, y), (a.x, a.y), (b.x, b.y));
-        let d2 = sign((x, y), (b.x, b.y), (c.x, c.y));
-        let d3 = sign((x, y), (c.x, c.y), (a.x, a.y));
-        let has_neg = (d1 < 0.0) || (d2 < 0.0) || (d3 < 0.0);
-        let has_pos = (d1 > 0.0) || (d2 > 0.0) || (d3 > 0.0);
-        !(has_neg && has_pos)
-    }
+        let p = (x, y);
 
-    fn avg_pixel_color(&self, image: &DynamicImage) -> Color {
+        let cross = |(ax, ay): (f32, f32), (bx, by): (f32, f32), (cx, cy): (f32, f32)| {
+            (ax - cx) * (by - cy) - (bx - cx) * (ay - cy)
+        };
+
+        let d1 = cross(p, (a.x, a.y), (b.x, b.y));
+        let d2 = cross(p, (b.x, b.y), (c.x, c.y));
+        let d3 = cross(p, (c.x, c.y), (a.x, a.y));
+
+        // Point is inside iff it's on the same side of all three edges
+        let all_non_negative = d1 >= 0.0 && d2 >= 0.0 && d3 >= 0.0;
+        let all_non_positive = d1 <= 0.0 && d2 <= 0.0 && d3 <= 0.0;
+        all_non_negative || all_non_positive
+    }
+    fn avg_pixel_color(&self, image: &RgbaImage) -> Color {
         let bbox = self.bounding_box();
 
-        let pixels: Vec<Rgba<u8>> = bbox
+        let (sum, count) = bbox
             .pixel_coords()
             .filter(|&(x, y)| self.contains(x as f32, y as f32))
-            .map(|(x, y)| image.get_pixel(x, y))
-            .collect();
+            .map(|(x, y)| *image.get_pixel(x, y))
+            .fold(([0u64; 4], 0u64), |(mut acc, count), px| {
+                acc.iter_mut().zip(px.0).for_each(|(a, b)| *a += b as u64);
+                (acc, count + 1)
+            });
 
-        let count = pixels.len() as u64;
         if count == 0 {
             return [0, 0, 0, 0];
         }
-        pixels
-            .iter()
-            .fold([0u64; 4], |mut acc, px| {
-                acc.iter_mut().zip(px.0).for_each(|(a, b)| *a += b as u64);
-                acc
-            })
-            .map(|sum| (sum / count) as u8)
+        sum.map(|s| (s / count) as u8)
     }
 }
 
@@ -436,13 +436,14 @@ fn get_color_of_tri(
     image: &DynamicImage,
     tri: &DelaunayTriangulation<Point2<f32>>,
 ) -> Vec<ColoredTriangle<f32>> {
+    let rgba = image.to_rgba8();
     tri.inner_faces()
         .collect::<Vec<_>>()
         .par_iter()
         .map(|face| {
             let positions = face.vertices().map(|v| v.position());
             let triangle = Triangle(positions);
-            let color = triangle.avg_pixel_color(image);
+            let color = triangle.avg_pixel_color(&rgba);
             ColoredTriangle::new(positions.map(|v| Point::new(v.x, v.y)), color)
         })
         .collect()
