@@ -7,7 +7,7 @@ use thiserror::Error;
 // https://cosmiccoding.com.au/tutorials/lowpoly/
 
 #[derive(Error, Debug)]
-pub enum LowpolyError {
+pub enum GeometrizeError {
     #[error("Expected n in range [10, {num_pixels}], got {n}")]
     NSamplesError { num_pixels: u32, n: u32 },
 
@@ -145,7 +145,7 @@ where
 
         // calculate distances from centriod to vertices
         let [a, b, c] = [v1, v2, v3].map(|Point { x, y }| f32::hypot(cx - x.as_(), cy - y.as_()));
-        
+
         // +0.5 to account for any rounding down i.e. casts
         // this ensures that the circles always cover the full image.
         let radius = a.max(b).max(c) + 0.5;
@@ -167,8 +167,7 @@ pub fn seed_from_image(image: &DynamicImage) -> u64 {
 
     let mut hasher = FxHasher::with_seed(1);
     hasher.write(image.as_bytes());
-    let seed = hasher.finish();
-    seed
+    hasher.finish()
 }
 
 pub fn geometrize(
@@ -176,12 +175,12 @@ pub fn geometrize(
     style: Style,
     n: u32,
     sampling: SamplingParams,
-) -> Result<RgbaImage, LowpolyError> {
+) -> Result<RgbaImage, GeometrizeError> {
     let (w, h) = image.dimensions();
     let pixels = w * h;
 
     if !(10..=(w * h)).contains(&n) {
-        return Err(LowpolyError::NSamplesError {
+        return Err(GeometrizeError::NSamplesError {
             num_pixels: pixels,
             n,
         });
@@ -203,7 +202,7 @@ fn lowpoly(
     n: u32,
     mut rng: SmallRng,
     edge_mode: EdgePoints,
-) -> Result<RgbaImage, LowpolyError> {
+) -> Result<RgbaImage, GeometrizeError> {
     let grayscale = DynamicImage::ImageLuma8(image.to_luma8());
     let diff_image = diff_of_gaussians(grayscale)?;
 
@@ -230,9 +229,9 @@ fn pointillist(
     noise: f32,
     mut rng: SmallRng,
     edge_mode: EdgePoints,
-) -> Result<RgbaImage, LowpolyError> {
+) -> Result<RgbaImage, GeometrizeError> {
     if !(0.0..=1.0).contains(&noise) {
-        return Err(LowpolyError::NoiseError(noise));
+        return Err(GeometrizeError::NoiseError(noise));
     }
 
     let grayscale = DynamicImage::ImageLuma8(image.to_luma8());
@@ -255,7 +254,6 @@ fn pointillist(
         .collect();
 
     circles.sort_by(|a, b| b.radius.total_cmp(&a.radius));
-
 
     add_noise(&mut circles, noise, &mut rng);
 
@@ -280,7 +278,7 @@ fn add_noise<T>(v: &mut Vec<T>, displacement_fraction: f32, rng: &mut SmallRng) 
     }
 }
 
-fn diff_of_gaussians(gray_image: DynamicImage) -> Result<GrayImage, LowpolyError> {
+fn diff_of_gaussians(gray_image: DynamicImage) -> Result<GrayImage, GeometrizeError> {
     let (width, height) = gray_image.dimensions();
 
     let gauss1 = add_blur(gray_image.clone(), 2.0)?.to_luma32f();
@@ -310,7 +308,7 @@ fn sample(
     n: u32,
     mut rng: &mut SmallRng,
     edge_mode: EdgePoints,
-) -> Result<Vec<[u32; 2]>, LowpolyError> {
+) -> Result<Vec<[u32; 2]>, GeometrizeError> {
     let (w, h) = diff_image.dimensions();
     let num_pixels = w as u32 * h as u32;
 
@@ -368,56 +366,89 @@ fn delaunay(samples: &[[f32; 2]]) -> DelaunayTriangulation<Point2<f32>> {
     DelaunayTriangulation::bulk_load(points).unwrap()
 }
 
+struct BoundingBox {
+    min_x: u32,
+    min_y: u32,
+    max_x: u32,
+    max_y: u32,
+}
+
+impl BoundingBox {
+    fn from_positions(positions: &[Point2<f32>; 3]) -> Self {
+        Self {
+            min_x: positions.iter().map(|p| p.x as u32).min().unwrap(),
+            min_y: positions.iter().map(|p| p.y as u32).min().unwrap(),
+            max_x: positions.iter().map(|p| p.x.ceil() as u32).max().unwrap(),
+            max_y: positions.iter().map(|p| p.y.ceil() as u32).max().unwrap(),
+        }
+    }
+    fn pixel_coords(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
+        let xs = self.min_x..=self.max_x;
+        let ys = self.min_y..=self.max_y;
+        ys.flat_map(move |y| xs.clone().map(move |x| (x, y)))
+    }
+}
+
+struct Triangle([Point2<f32>; 3]);
+
+impl Triangle {
+    fn bounding_box(&self) -> BoundingBox {
+        BoundingBox::from_positions(&self.0)
+    }
+    // Is the point inside of the triangle
+    fn contains(&self, x: f32, y: f32) -> bool {
+        let [a, b, c] = &self.0;
+        let sign = |p1: (f32, f32), p2: (f32, f32), p3: (f32, f32)| {
+            (p1.0 - p3.0) * (p2.1 - p3.1) - (p2.0 - p3.0) * (p1.1 - p3.1)
+        };
+        let d1 = sign((x, y), (a.x, a.y), (b.x, b.y));
+        let d2 = sign((x, y), (b.x, b.y), (c.x, c.y));
+        let d3 = sign((x, y), (c.x, c.y), (a.x, a.y));
+        let has_neg = (d1 < 0.0) || (d2 < 0.0) || (d3 < 0.0);
+        let has_pos = (d1 > 0.0) || (d2 > 0.0) || (d3 > 0.0);
+        !(has_neg && has_pos)
+    }
+
+    fn avg_pixel_color(&self, image: &DynamicImage) -> Color {
+        let bbox = self.bounding_box();
+
+        let pixels: Vec<Rgba<u8>> = bbox
+            .pixel_coords()
+            .filter(|&(x, y)| self.contains(x as f32, y as f32))
+            .map(|(x, y)| image.get_pixel(x, y))
+            .collect();
+
+        let count = pixels.len() as u64;
+        if count == 0 {
+            return [0, 0, 0, 0];
+        }
+        pixels
+            .iter()
+            .fold([0u64; 4], |mut acc, px| {
+                acc.iter_mut().zip(px.0).for_each(|(a, b)| *a += b as u64);
+                acc
+            })
+            .map(|sum| (sum / count) as u8)
+    }
+}
+
 fn get_color_of_tri(
     image: &DynamicImage,
     tri: &DelaunayTriangulation<Point2<f32>>,
 ) -> Vec<ColoredTriangle<f32>> {
-    let (width, height) = image.dimensions();
-    let inner_faces: Vec<_> = tri.inner_faces().collect();
-    inner_faces.par_iter()
+    tri.inner_faces()
+        .collect::<Vec<_>>()
+        .par_iter()
         .map(|face| {
-            let verts = face.vertices();
-            let positions = verts.map(|v| v.position());
-
-            // Bounding box clipped to image
-            let min_x = positions.iter().map(|p| p.x as u32).min().unwrap().max(0);
-            let min_y = positions.iter().map(|p| p.y as u32).min().unwrap().max(0);
-            let max_x = positions
-                .iter()
-                .map(|p| p.x.ceil() as u32)
-                .max()
-                .unwrap()
-                .min(width - 1);
-            let max_y = positions
-                .iter()
-                .map(|p| p.y.ceil() as u32)
-                .max()
-                .unwrap()
-                .min(height - 1);
-
-            let pixels: Vec<Rgba<u8>> = (min_y..=max_y)
-                .flat_map(|y| (min_x..=max_x).map(move |x| (x, y)))
-                .filter(|&(x, y)| {
-                    point_in_triangle(
-                        x as f32,
-                        y as f32,
-                        &positions[0],
-                        &positions[1],
-                        &positions[2],
-                    )
-                })
-                .map(|(x, y)| image.get_pixel(x, y))
-                .collect();
-
-            ColoredTriangle::new(
-                positions.map(|v| Point::new(v.x, v.y)),
-                avg_color(&pixels[..]),
-            )
+            let positions = face.vertices().map(|v| v.position());
+            let triangle = Triangle(positions);
+            let color = triangle.avg_pixel_color(image);
+            ColoredTriangle::new(positions.map(|v| Point::new(v.x, v.y)), color)
         })
         .collect()
 }
 
-fn add_blur(image: DynamicImage, sigma: f64) -> Result<DynamicImage, LowpolyError> {
+fn add_blur(image: DynamicImage, sigma: f64) -> Result<DynamicImage, GeometrizeError> {
     use libblur::{self, AnisotropicRadius};
 
     libblur::fast_gaussian_blur_image(
@@ -426,34 +457,5 @@ fn add_blur(image: DynamicImage, sigma: f64) -> Result<DynamicImage, LowpolyErro
         libblur::EdgeMode2D::new(libblur::EdgeMode::Clamp),
         libblur::ThreadingPolicy::Adaptive,
     )
-    .ok_or(LowpolyError::BlurError)
-}
-
-fn avg_color(pixels: &[Rgba<u8>]) -> Color {
-    let count = pixels.len() as u64;
-    if count == 0 {
-        return [0, 0, 0, 255];
-    }
-    pixels
-        .iter()
-        .fold([0u64; 4], |mut acc, px| {
-            acc[0] += px[0] as u64;
-            acc[1] += px[1] as u64;
-            acc[2] += px[2] as u64;
-            acc[3] += px[3] as u64;
-            acc
-        })
-        .map(|sum| (sum / count) as u8)
-}
-
-fn point_in_triangle(px: f32, py: f32, a: &Point2<f32>, b: &Point2<f32>, c: &Point2<f32>) -> bool {
-    let sign = |p1: (f32, f32), p2: (f32, f32), p3: (f32, f32)| {
-        (p1.0 - p3.0) * (p2.1 - p3.1) - (p2.0 - p3.0) * (p1.1 - p3.1)
-    };
-    let d1 = sign((px, py), (a.x, a.y), (b.x, b.y));
-    let d2 = sign((px, py), (b.x, b.y), (c.x, c.y));
-    let d3 = sign((px, py), (c.x, c.y), (a.x, a.y));
-    let has_neg = (d1 < 0.0) || (d2 < 0.0) || (d3 < 0.0);
-    let has_pos = (d1 > 0.0) || (d2 > 0.0) || (d3 > 0.0);
-    !(has_neg && has_pos)
+    .ok_or(GeometrizeError::BlurError)
 }
