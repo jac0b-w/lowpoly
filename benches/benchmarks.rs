@@ -3,6 +3,7 @@ use geometrize::*;
 use image::{GenericImageView, ImageReader};
 use std::hint::black_box;
 use std::time::Duration;
+use thousands::Separable;
 
 const LARGE_IMAGE_PATH: &str = "benches/inputs/large_image.png";
 
@@ -20,11 +21,12 @@ fn bench_large_image(c: &mut Criterion, style: Style) {
     let mut group = c.benchmark_group(format!("{style:?} Large Image ({w}x{h}) - Sample Sizes"));
     group.measurement_time(Duration::from_secs(30));
     group.sample_size(10);
-    group.plot_config(PlotConfiguration::default().summary_scale(criterion::AxisScale::Logarithmic));
+    group
+        .plot_config(PlotConfiguration::default().summary_scale(criterion::AxisScale::Logarithmic));
 
     for &sample_sizes in SAMPLE_SIZES {
         group.bench_with_input(
-            BenchmarkId::from_parameter(sample_sizes),
+            BenchmarkId::from_parameter(sample_sizes.separate_with_commas()),
             &sample_sizes,
             |b, &n| {
                 b.iter(|| {
