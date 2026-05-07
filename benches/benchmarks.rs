@@ -1,18 +1,25 @@
-use criterion::{BenchmarkId, Criterion, PlotConfiguration, criterion_group, criterion_main};
+use criterion::{
+    BatchSize, BenchmarkId, Criterion, PlotConfiguration, criterion_group, criterion_main,
+};
 use geometrize::*;
 use image::{GenericImageView, ImageReader};
 use std::hint::black_box;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use thousands::Separable;
-
-const LARGE_IMAGE_PATH: &str = "benches/inputs/large_image.png";
 
 const SAMPLE_SIZES: &[u32] = &[
     50, 100, 500, 1000, 5000, 10_000, 50_000, 100_000, 500_000, 1_000_000, 5_000_000, 10_000_000,
 ];
 
+fn fixtures_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+}
+
 fn bench_large_image(c: &mut Criterion, style: Style) {
-    let large_image = ImageReader::open(LARGE_IMAGE_PATH)
+    let large_image = ImageReader::open(fixtures_dir().join("mountains.jpg"))
         .unwrap()
         .decode()
         .unwrap();
@@ -29,14 +36,18 @@ fn bench_large_image(c: &mut Criterion, style: Style) {
             BenchmarkId::from_parameter(sample_sizes.separate_with_commas()),
             &sample_sizes,
             |b, &n| {
-                b.iter(|| {
-                    geometrize(
-                        black_box(large_image.clone()),
-                        black_box(style.clone()),
-                        black_box(n),
-                        black_box(SamplingParams::default()),
-                    )
-                })
+                b.iter_batched(
+                    || large_image.clone(),
+                    |image| {
+                        geometrize(
+                            black_box(&image),
+                            black_box(style.clone()),
+                            black_box(n),
+                            black_box(SamplingParams::default()),
+                        )
+                    },
+                    BatchSize::LargeInput,
+                )
             },
         );
     }
