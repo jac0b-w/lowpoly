@@ -2,6 +2,17 @@
 name = "geometrize"
 version = "0.1.0"
 edition = "2024"
+description = "Transform images into geometric art."
+license = "MIT OR Apache-2.0"
+authors = ["jac0-b"]
+repository = "https://github.com/jac0-b/geometrize"
+homepage = "https://github.com/jac0-b/geometrize"
+documentation = "https://docs.rs/geometrize"
+readme = "README.md"
+keywords = ["geometry", "image"]
+categories = ["multimedia::images"]
+exclude = ["benches/", "tests/", ".github/", "images/"]
+rust-version = "1.88"
 
 [dependencies]
 image = { version = "0.25.8", default-features = false }
