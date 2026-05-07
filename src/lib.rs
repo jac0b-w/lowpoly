@@ -1,31 +1,171 @@
+//! # Geometrize
+//!
+//! Transform images into geometric art.
+//!
+//! This crate provides two rendering styles:
+//! - **Low-poly**: Decomposes an image into colored triangles via Delaunay triangulation.
+//! - **Pointillist**: Renders the same triangulation as overlapping circles.
+//!
+//! # Quick Start
+//! Images are transformed using the [`geometrize`] function.
+//! ```
+//! use geometrize::{geometrize, Style, SamplingParams};
+//! use image::{open, RgbaImage};
+//!
+//! let image = open("launch.jpg").unwrap();
+//! # let image = open("./tests/fixtures/launch.jpg").unwrap();
+//! 
+//! let lowpoly: RgbaImage = geometrize(
+//!     &image,
+//!     Style::Lowpoly,
+//!     70_000,
+//!     SamplingParams::default()
+//! ).unwrap();
+//! lowpoly.save("lowpoly_70k.jpg").unwrap();
+//!
+//! let pointillist: RgbaImage = geometrize(
+//!     &image,
+//!     Style::Pointillist {noise: 0.0},
+//!     20_000,
+//!     SamplingParams::default()
+//! ).unwrap();
+//! pointillist.save("pointillist_20k.jpg").unwrap();
+//! ```
+//!
+//! <div style="display:flex; gap:0.5%;">
+//!   <figure style="width:33%; margin:0;">
+//!     <img src="https://github.com/jac0-b/geometrize/blob/990b60fbee240eb5f8bf885198ad6d8f0ef60931/tests/fixtures/launch.jpg?raw=true" style="width:100%;">
+//!     <figcaption>launch.jpg</figcaption>
+//!   </figure>
+//!
+//!   <figure style="width:33%; margin:0;">
+//!     <img src="https://github.com/jac0-b/geometrize/blob/0140865afdb167904d2feb58f82eef07478130d7/images/lowpoly_70k_launch.jpg?raw=true" style="width:100%;">
+//!     <figcaption>lowpoly_70k.jpg</figcaption>
+//!   </figure>
+//!   <figure style="width:33%; margin:0;">
+//!     <img src="https://github.com/jac0-b/geometrize/blob/0140865afdb167904d2feb58f82eef07478130d7/images/pointillist__20k_launch.jpg?raw=true" style="width:100%;">
+//!     <figcaption>pointillist_20k.jpg</figcaption>
+//!   </figure>
+//! </div>
+//!
+//! # Transparent images
+//!
+//! This also works with transparent images.
+//!
+//! ```
+//! let image = open("dice.png").unwrap();
+//! # let image = open("tests/fixtures/dice.png").unwrap();
+//!
+//! let lowpoly: RgbaImage = geometrize(
+//!     &image,
+//!     Style::Lowpoly,
+//!     50_000,
+//!     SamplingParams::default()
+//! ).unwrap();
+//! lowpoly.save("lowpoly_50k_dice.png").unwrap();
+//!
+//! let pointillist: RgbaImage = geometrize(
+//!     &image,
+//!     Style::Pointillist {noise: 0.0},
+//!     10_000,
+//!     SamplingParams::default()
+//! ).unwrap();
+//! pointillist.save("pointillist_10k_dice.png").unwrap();
+//! ```
+//!
+//! <div style="display:flex; gap:0.5%;">
+//!   <figure style="width:33%; margin:0;">
+//!     <img src="https://github.com/jac0-b/geometrize/blob/990b60fbee240eb5f8bf885198ad6d8f0ef60931/tests/fixtures/dice.png?raw=true" style="width:100%;">
+//!     <figcaption>dice.png</figcaption>
+//!   </figure>
+//!
+//!   <figure style="width:33%; margin:0;">
+//!     <img src="https://private-user-images.githubusercontent.com/51512690/588902290-de99517f-9471-4d33-b925-a12b4cf54f7a.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NzgxNTkwMzUsIm5iZiI6MTc3ODE1ODczNSwicGF0aCI6Ii81MTUxMjY5MC81ODg5MDIyOTAtZGU5OTUxN2YtOTQ3MS00ZDMzLWI5MjUtYTEyYjRjZjU0ZjdhLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNjA1MDclMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjYwNTA3VDEyNTg1NVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTFkYzBkMzQ2MWRjZjc3ZTUwZTRkYmRhNWYyZGVhMTczM2Y2NGQ3ZmM2MGU2MmZiYmU2NjYzZjFiMzJmYmMzOWYmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0JnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1pbWFnZSUyRnBuZyJ9.Uk5sZGIWFGzGW-p7clBJA-w5Wd5kf9eEdB3QgmC_o7E" style="width:100%;">
+//!     <figcaption>lowpoly_50k_dice.png</figcaption>
+//!   </figure>
+//!   <figure style="width:33%; margin:0;">
+//!     <img src="https://private-user-images.githubusercontent.com/51512690/588902770-ab1f754e-66e6-4689-90ca-3ea91e13a0e5.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NzgxNTkwMzUsIm5iZiI6MTc3ODE1ODczNSwicGF0aCI6Ii81MTUxMjY5MC81ODg5MDI3NzAtYWIxZjc1NGUtNjZlNi00Njg5LTkwY2EtM2VhOTFlMTNhMGU1LnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNjA1MDclMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjYwNTA3VDEyNTg1NVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTYwNTdjMjRjNmNmMTczM2E5MmRlYjQxOTEyODZjMTZhODg2NDdkMWM4N2ZhMDJmN2QwNTI2ZWIxMjBmZWM2NjImWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0JnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1pbWFnZSUyRnBuZyJ9.ehe9W9nrT6V5fqBNgOeuqbpDN9NSxKwdSfYLt0R6eC8" style="width:100%;">
+//!     <figcaption>pointillist_10k_dice.png</figcaption>
+//!   </figure>
+//! </div>
+//!
+
 use image::{DynamicImage, GenericImageView, GrayImage, Rgba, RgbaImage};
 use rand::{RngExt, SeedableRng, rngs::SmallRng, seq::index};
 use rayon::prelude::*;
 use spade::{DelaunayTriangulation, Point2, Triangulation};
 use thiserror::Error;
 
-// https://cosmiccoding.com.au/tutorials/lowpoly/
-
+/// Error type for [`geometrize`].
 #[derive(Error, Debug)]
 pub enum GeometrizeError {
+    /// The requested sample count `n` was outside the valid range `[10, num_pixels]`.
     #[error("Expected n in range [10, {num_pixels}], got {n}")]
     NSamplesError { num_pixels: u32, n: u32 },
 
+    /// The internal Gaussian blur step failed.
     #[error("Error blurring image for edge detection")]
     BlurError,
 
+    /// The `noise` parameter for [`Style::Pointillist`] was outside `[0.0, 1.0]`.
     #[error("Expected noise in range [0.0, 1.0] got {0}")]
     NoiseError(f32),
 }
 
+/// The visual style used to render the output image.
 #[derive(Debug, Clone)]
 pub enum Style {
+    /// Renders the image as a mosaic of colored triangles based on this [tutorial by Samuel Hinton](https://cosmiccoding.com.au/tutorials/lowpoly/).
     Lowpoly,
-    Pointillist { noise: f32 },
+    /// Renders the image as overlapping colored circles.
+    Pointillist {
+        /// `noise` controls the draw order of the circles. A value of `0.0` will draw smaller circles in the foreground, while
+        /// a value of `1.0` will randomly draw circles regardless of their size.
+        /// Must be in the range `[0.0, 1.0]`.
+        ///
+        /// ```
+        /// let image = open("aurora.jpg").unwrap();
+        /// # let image = open("./tests/fixtures/aurora.jpg").unwrap();
+        ///
+        /// geometrize(
+        ///     &image,
+        ///     Style::Pointillist {noise: 0.0},
+        ///     100_000,
+        ///     SamplingParams::default()
+        /// ).unwrap().save("pointillist_0_noise.jpg").unwrap();
+        ///
+        /// geometrize(
+        ///     &image,
+        ///     Style::Pointillist {noise: 1.0},
+        ///     20_000,
+        ///     SamplingParams::default()
+        /// ).unwrap().save("pointillist_100_noise.jpg").unwrap();
+        /// ```
+        ///
+        /// <div style="display:flex; gap:0.5%;">
+        ///   <figure style="width:33%; margin:0;">
+        ///     <img src="https://github.com/jac0-b/geometrize/blob/0140865afdb167904d2feb58f82eef07478130d7/images/aurora.jpg?raw=true" style="width:100%;">
+        ///     <figcaption>bubbles.jpg</figcaption>
+        ///   </figure>
+        ///   <figure style="width:33%; margin:0;">
+        ///     <img src="https://github.com/jac0-b/geometrize/blob/0140865afdb167904d2feb58f82eef07478130d7/images/pointillist_noise0_20k_aurora.jpg?raw=true" style="width:100%;">
+        ///     <figcaption>pointillist_0_noise.jpg</figcaption>
+        ///   </figure>
+        ///   <figure style="width:33%; margin:0;">
+        ///     <img src="https://github.com/jac0-b/geometrize/blob/0140865afdb167904d2feb58f82eef07478130d7/images/pointillist_noise1_20k_aurora.jpg?raw=true" style="width:100%;">
+        ///     <figcaption>pointillist_100_noise.jpg</figcaption>
+        ///   </figure>
+        /// </div>
+        noise: f32,
+    },
 }
 
+/// Parameters controlling how sample points are chosen from the image.
 pub struct SamplingParams {
+    /// Determines the random seed used for point sampling. Defaults to [`SampleSeed::Image`].
     pub seed: SampleSeed,
+    /// Controls how many extra points are placed along the image border to prevent
+    /// distorted triangles at the edge of the image. Defaults to [`EdgePoints::Auto`].
     pub edge_mode: EdgePoints,
 }
 
@@ -38,17 +178,33 @@ impl Default for SamplingParams {
     }
 }
 
+/// Source of randomness for point sampling.
 #[derive(Debug, Copy, Clone)]
 pub enum SampleSeed {
+    /// A fresh random seed each run -- output will differ every time.
     Random,
+    /// A custom seed.
     Custom(u64),
+    /// A seed derived from the image content. This is the equivalent to
+    /// using [`seed_from_image`].
+    /// ```ignore
+    /// SampleSeed::Custom(seed_from_image(&image))
+    /// ```
     Image,
 }
 
+/// Controls how many sample points are placed along the image border.
+///
+/// This ensures the entire image frame is filled and avoids distortions at the edges.
 #[derive(Debug, Copy, Clone)]
 pub enum EdgePoints {
+    /// Automatically calculate the number of points to place around the border.
+    /// This is the default.
     Auto,
+    /// Do not place additional points around the border. This may result in gaps
+    /// around the edges of the image.
     Disabled,
+    /// Add exactly `count` border points, distributed evenly around the perimeter.
     Custom { count: u32 },
 }
 
@@ -143,7 +299,7 @@ where
         let cx = (v1.x.as_() + v2.x.as_() + v3.x.as_()) / 3.0;
         let cy = (v1.y.as_() + v2.y.as_() + v3.y.as_()) / 3.0;
 
-        // calculate distances from centriod to vertices
+        // calculate distances from centroid to vertices
         let [a, b, c] = [v1, v2, v3].map(|Point { x, y }| f32::hypot(cx - x.as_(), cy - y.as_()));
 
         // +0.5 to account for any rounding down i.e. casts
@@ -161,6 +317,9 @@ where
     }
 }
 
+/// Derive a seed from the content of an image.
+///
+/// Identical images will produce the same seed.
 pub fn seed_from_image(image: &DynamicImage) -> u64 {
     use rustc_hash::FxHasher;
     use std::hash::Hasher;
@@ -170,8 +329,57 @@ pub fn seed_from_image(image: &DynamicImage) -> u64 {
     hasher.finish()
 }
 
+/// Convert an image into geometric art.
+///
+/// Samples `n` points from the image biased toward areas of high contrast.
+/// This is effectively the level of detail of the output image.
+/// Note that `n` is just approximate and some samples will be rejected as triangle vertices.
+///
+/// Returns a stylized image built from shapes depending on the selected [`Style`]
+///
+/// # Arguments
+///
+/// - `image` — The source [`DynamicImage`] to geometrize.
+/// - `style` — [`Style::Lowpoly`] for triangles, [`Style::Pointillist`] for circles.
+/// - `n` — Number of sample points. The more points the more detail. Must be in `[10, width × height]`.
+/// - `sampling` — Seed and edge-point configuration; use [`SamplingParams::default()`] to start.
+///
+/// # Errors
+///
+/// Returns [`GeometrizeError::NSamplesError`] if `n` is out of range `[10, width × height]`,
+/// [`GeometrizeError::NoiseError`] if `noise` is outside `[0.0, 1.0]`,
+/// or [`GeometrizeError::BlurError`] if edge detection fails.
+///
+/// # Example
+///
+/// ```ignore
+/// use geometrize::{geometrize, Style, SamplingParams};
+/// use image::{open, RgbaImage};
+///
+/// let image = open("image.png").unwrap();
+///
+/// let lowpoly: RgbaImage = geometrize(
+///     &image.clone(),
+///     Style::Lowpoly,
+///     100_000,
+///     SamplingParams::default()
+/// ).unwrap();
+/// lowpoly.save("lowpoly_100k.png").unwrap();
+///
+/// let pointillist: RgbaImage = geometrize(
+///     &image,
+///     Style::Pointillist {noise: 0.0},
+///     20_000,
+///     SamplingParams::default()
+/// ).unwrap();
+/// pointillist.save("pointillist_20k.png").unwrap();
+/// ```
+///
+///
+///
+///
 pub fn geometrize(
-    image: DynamicImage,
+    image: &DynamicImage,
     style: Style,
     n: u32,
     sampling: SamplingParams,
@@ -198,7 +406,7 @@ pub fn geometrize(
 }
 
 fn lowpoly(
-    image: DynamicImage,
+    image: &DynamicImage,
     n: u32,
     mut rng: SmallRng,
     edge_mode: EdgePoints,
@@ -224,7 +432,7 @@ fn lowpoly(
 }
 
 fn pointillist(
-    image: DynamicImage,
+    image: &DynamicImage,
     n: u32,
     noise: f32,
     mut rng: SmallRng,
@@ -395,7 +603,7 @@ impl Triangle {
     fn bounding_box(&self) -> BoundingBox {
         BoundingBox::from_positions(&self.0)
     }
-    // Is the point inside of the triangle
+    // Is the point inside of the triangle?
     fn contains(&self, x: f32, y: f32) -> bool {
         let [a, b, c] = &self.0;
         let p = (x, y);

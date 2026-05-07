@@ -57,12 +57,11 @@ pub fn fetch_images(base: &str, filenames: &[&str]) -> (Vec<RgbImage>, Vec<Strin
 }
 
 fn run_geometrize_test(image_name: &str, style: Style, n: u32, subfolder: Option<&str>) {
-    let out_name = format!("{:?}_{}_{}k", style, image_name, n / 1000);
+    let out_name = format!("{:?}_{}k_{}", style, n / 1000, image_name);
     let (image, out_path) = setup(image_name, &out_name, subfolder);
-    geometrize(image, style, n, SamplingParams::default())
-        .unwrap()
-        .save(out_path)
-        .unwrap();
+    let output = geometrize(&image, style, n, SamplingParams::default()).unwrap();
+
+    output.save(out_path).unwrap();
 }
 
 #[test]
@@ -95,23 +94,39 @@ fn test_lowpoly_bubbles() {
 }
 
 #[test]
-fn test_lowpoly_aurora() {
-    run_geometrize_test("aurora.png", Style::Lowpoly, 20_000, Some("aurora"))
+fn test_lowpoly_launch() {
+    run_geometrize_test("launch.jpg", Style::Lowpoly, 70_000, Some("launch"));
 }
 
 #[test]
-fn test_pointillist_aurora() {
+fn test_pointillist_launch() {
+    run_geometrize_test("launch.jpg", Style::Pointillist { noise: 0.0 }, 20_000, Some("launch"));
+}
+
+#[test]
+fn test_lowpoly_aurora() {
+    run_geometrize_test("aurora.png", Style::Lowpoly, 100_000, Some("aurora"))
+}
+
+#[test]
+fn test_pointillist_bubbles() {
     run_geometrize_test(
-        "aurora.png",
+        "bubbles.jpg",
         Style::Pointillist { noise: 0.0 },
-        20_000,
-        Some("aurora"),
+        40_000,
+        Some("bubbles"),
     );
     run_geometrize_test(
-        "aurora.png",
+        "bubbles.jpg",
+        Style::Pointillist { noise: 0.5 },
+        40_000,
+        Some("bubbles"),
+    );
+    run_geometrize_test(
+        "bubbles.jpg",
         Style::Pointillist { noise: 1.0 },
-        20_000,
-        Some("aurora"),
+        40_000,
+        Some("bubbles"),
     )
 }
 
@@ -169,7 +184,7 @@ fn run_standard_images_test(style: Style, subfolder: &str) {
 
     for (image, name) in images.into_iter().zip(names) {
         geometrize(
-            DynamicImage::ImageRgb8(image),
+            &DynamicImage::ImageRgb8(image),
             style.clone(),
             10_000,
             SamplingParams::default(),
