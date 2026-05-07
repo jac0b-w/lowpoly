@@ -8,12 +8,11 @@
 //!
 //! # Quick Start
 //! Images are transformed using the [`geometrize`] function.
-//! ```
+//! ``` no_run
 //! use geometrize::{geometrize, Style, SamplingParams};
 //! use image::{open, RgbaImage};
 //!
 //! let image = open("launch.jpg").unwrap();
-//! # let image = open("./tests/fixtures/launch.jpg").unwrap();
 //! 
 //! let lowpoly: RgbaImage = geometrize(
 //!     &image,
@@ -21,7 +20,7 @@
 //!     70_000,
 //!     SamplingParams::default()
 //! ).unwrap();
-//! lowpoly.save("lowpoly_70k.jpg").unwrap();
+//! lowpoly.save("lowpoly_70k.png").unwrap();
 //!
 //! let pointillist: RgbaImage = geometrize(
 //!     &image,
@@ -29,7 +28,7 @@
 //!     20_000,
 //!     SamplingParams::default()
 //! ).unwrap();
-//! pointillist.save("pointillist_20k.jpg").unwrap();
+//! pointillist.save("pointillist_20k.png").unwrap();
 //! ```
 //!
 //! <div style="display:flex; gap:0.5%;">
@@ -40,11 +39,11 @@
 //!
 //!   <figure style="width:33%; margin:0;">
 //!     <img src="https://github.com/jac0-b/geometrize/blob/0140865afdb167904d2feb58f82eef07478130d7/images/lowpoly_70k_launch.jpg?raw=true" style="width:100%;">
-//!     <figcaption>lowpoly_70k.jpg</figcaption>
+//!     <figcaption>lowpoly_70k.png</figcaption>
 //!   </figure>
 //!   <figure style="width:33%; margin:0;">
 //!     <img src="https://github.com/jac0-b/geometrize/blob/0140865afdb167904d2feb58f82eef07478130d7/images/pointillist__20k_launch.jpg?raw=true" style="width:100%;">
-//!     <figcaption>pointillist_20k.jpg</figcaption>
+//!     <figcaption>pointillist_20k.png</figcaption>
 //!   </figure>
 //! </div>
 //!
@@ -52,10 +51,12 @@
 //!
 //! This also works with transparent images.
 //!
-//! ```
-//! let image = open("dice.png").unwrap();
-//! # let image = open("tests/fixtures/dice.png").unwrap();
+//! ```no_run
+//! # use geometrize::{geometrize, Style, SamplingParams};
+//! # use image::{open, RgbaImage};
 //!
+//! let image = open("dice.png").unwrap();
+//! 
 //! let lowpoly: RgbaImage = geometrize(
 //!     &image,
 //!     Style::Lowpoly,
@@ -80,11 +81,11 @@
 //!   </figure>
 //!
 //!   <figure style="width:33%; margin:0;">
-//!     <img src="https://private-user-images.githubusercontent.com/51512690/588902290-de99517f-9471-4d33-b925-a12b4cf54f7a.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NzgxNTkwMzUsIm5iZiI6MTc3ODE1ODczNSwicGF0aCI6Ii81MTUxMjY5MC81ODg5MDIyOTAtZGU5OTUxN2YtOTQ3MS00ZDMzLWI5MjUtYTEyYjRjZjU0ZjdhLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNjA1MDclMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjYwNTA3VDEyNTg1NVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTFkYzBkMzQ2MWRjZjc3ZTUwZTRkYmRhNWYyZGVhMTczM2Y2NGQ3ZmM2MGU2MmZiYmU2NjYzZjFiMzJmYmMzOWYmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0JnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1pbWFnZSUyRnBuZyJ9.Uk5sZGIWFGzGW-p7clBJA-w5Wd5kf9eEdB3QgmC_o7E" style="width:100%;">
+//!     <img src="https://github.com/jac0-b/geometrize/blob/2594d40a15b8726bccafa647243d1b1627a021a0/images/lowpoly_50k_dice.png?raw=true" style="width:100%;">
 //!     <figcaption>lowpoly_50k_dice.png</figcaption>
 //!   </figure>
 //!   <figure style="width:33%; margin:0;">
-//!     <img src="https://private-user-images.githubusercontent.com/51512690/588902770-ab1f754e-66e6-4689-90ca-3ea91e13a0e5.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NzgxNTkwMzUsIm5iZiI6MTc3ODE1ODczNSwicGF0aCI6Ii81MTUxMjY5MC81ODg5MDI3NzAtYWIxZjc1NGUtNjZlNi00Njg5LTkwY2EtM2VhOTFlMTNhMGU1LnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNjA1MDclMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjYwNTA3VDEyNTg1NVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTYwNTdjMjRjNmNmMTczM2E5MmRlYjQxOTEyODZjMTZhODg2NDdkMWM4N2ZhMDJmN2QwNTI2ZWIxMjBmZWM2NjImWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0JnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1pbWFnZSUyRnBuZyJ9.ehe9W9nrT6V5fqBNgOeuqbpDN9NSxKwdSfYLt0R6eC8" style="width:100%;">
+//!     <img src="https://github.com/jac0-b/geometrize/blob/2594d40a15b8726bccafa647243d1b1627a021a0/images/pointillist_10k_dice.png?raw=true" style="width:100%;">
 //!     <figcaption>pointillist_10k_dice.png</figcaption>
 //!   </figure>
 //! </div>
@@ -123,37 +124,39 @@ pub enum Style {
         /// a value of `1.0` will randomly draw circles regardless of their size.
         /// Must be in the range `[0.0, 1.0]`.
         ///
-        /// ```
+        /// ```no_run
+        /// # use geometrize::{geometrize, Style, SamplingParams};
+        /// # use image::{open, RgbaImage};
+        ///
         /// let image = open("aurora.jpg").unwrap();
-        /// # let image = open("./tests/fixtures/aurora.jpg").unwrap();
         ///
         /// geometrize(
         ///     &image,
         ///     Style::Pointillist {noise: 0.0},
         ///     100_000,
         ///     SamplingParams::default()
-        /// ).unwrap().save("pointillist_0_noise.jpg").unwrap();
+        /// ).unwrap().save("pointillist_0_noise.png").unwrap();
         ///
         /// geometrize(
         ///     &image,
         ///     Style::Pointillist {noise: 1.0},
         ///     20_000,
         ///     SamplingParams::default()
-        /// ).unwrap().save("pointillist_100_noise.jpg").unwrap();
+        /// ).unwrap().save("pointillist_100_noise.png").unwrap();
         /// ```
         ///
         /// <div style="display:flex; gap:0.5%;">
         ///   <figure style="width:33%; margin:0;">
         ///     <img src="https://github.com/jac0-b/geometrize/blob/0140865afdb167904d2feb58f82eef07478130d7/images/aurora.jpg?raw=true" style="width:100%;">
-        ///     <figcaption>bubbles.jpg</figcaption>
+        ///     <figcaption>aurora.jpg</figcaption>
         ///   </figure>
         ///   <figure style="width:33%; margin:0;">
         ///     <img src="https://github.com/jac0-b/geometrize/blob/0140865afdb167904d2feb58f82eef07478130d7/images/pointillist_noise0_20k_aurora.jpg?raw=true" style="width:100%;">
-        ///     <figcaption>pointillist_0_noise.jpg</figcaption>
+        ///     <figcaption>pointillist_0_noise.png</figcaption>
         ///   </figure>
         ///   <figure style="width:33%; margin:0;">
         ///     <img src="https://github.com/jac0-b/geometrize/blob/0140865afdb167904d2feb58f82eef07478130d7/images/pointillist_noise1_20k_aurora.jpg?raw=true" style="width:100%;">
-        ///     <figcaption>pointillist_100_noise.jpg</figcaption>
+        ///     <figcaption>pointillist_100_noise.png</figcaption>
         ///   </figure>
         /// </div>
         noise: f32,
@@ -352,19 +355,19 @@ pub fn seed_from_image(image: &DynamicImage) -> u64 {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use geometrize::{geometrize, Style, SamplingParams};
-/// use image::{open, RgbaImage};
+/// ```no_run
+/// # use geometrize::{geometrize, Style, SamplingParams};
+/// # use image::{open, RgbaImage};
 ///
-/// let image = open("image.png").unwrap();
-///
+/// let image = open("launch.jpg").unwrap();
+/// 
 /// let lowpoly: RgbaImage = geometrize(
-///     &image.clone(),
+///     &image,
 ///     Style::Lowpoly,
-///     100_000,
+///     70_000,
 ///     SamplingParams::default()
 /// ).unwrap();
-/// lowpoly.save("lowpoly_100k.png").unwrap();
+/// lowpoly.save("lowpoly_70k.png").unwrap();
 ///
 /// let pointillist: RgbaImage = geometrize(
 ///     &image,
@@ -374,10 +377,6 @@ pub fn seed_from_image(image: &DynamicImage) -> u64 {
 /// ).unwrap();
 /// pointillist.save("pointillist_20k.png").unwrap();
 /// ```
-///
-///
-///
-///
 pub fn geometrize(
     image: &DynamicImage,
     style: Style,
@@ -397,7 +396,7 @@ pub fn geometrize(
     let rng = match sampling.seed {
         SampleSeed::Random => rand::make_rng(),
         SampleSeed::Custom(state) => SmallRng::seed_from_u64(state),
-        SampleSeed::Image => SmallRng::seed_from_u64(seed_from_image(&image)),
+        SampleSeed::Image => SmallRng::seed_from_u64(seed_from_image(image)),
     };
     match style {
         Style::Lowpoly => lowpoly(image, n, rng, sampling.edge_mode),
@@ -420,7 +419,7 @@ fn lowpoly(
         .collect();
 
     let triangulation = delaunay(&points[..]);
-    let colored_triangles = get_color_of_tri(&image, &triangulation);
+    let colored_triangles = get_color_of_tri(image, &triangulation);
 
     let (w, h) = image.dimensions();
     let mut background = RgbaImage::from_pixel(w, h, Rgba([0, 0, 0, 0]));
@@ -451,7 +450,7 @@ fn pointillist(
         .collect();
 
     let triangulation = delaunay(&points[..]);
-    let vertices_colors = get_color_of_tri(&image, &triangulation);
+    let vertices_colors = get_color_of_tri(image, &triangulation);
 
     let (w, h) = image.dimensions();
     let mut background = RgbaImage::from_pixel(w, h, Rgba([0, 0, 0, 0]));
@@ -472,7 +471,7 @@ fn pointillist(
     Ok(background)
 }
 
-fn add_noise<T>(v: &mut Vec<T>, displacement_fraction: f32, rng: &mut SmallRng) {
+fn add_noise<T>(v: &mut [T], displacement_fraction: f32, rng: &mut SmallRng) {
     let len = v.len();
     if len == 0 {
         return;
@@ -518,7 +517,7 @@ fn sample(
     edge_mode: EdgePoints,
 ) -> Result<Vec<[u32; 2]>, GeometrizeError> {
     let (w, h) = diff_image.dimensions();
-    let num_pixels = w as u32 * h as u32;
+    let num_pixels = w * h;
 
     let mut points: Vec<[u32; 2]> = index::sample(&mut rng, num_pixels as usize, n as usize - 4)
         .into_iter()
@@ -538,7 +537,7 @@ fn sample(
     match edge_mode {
         EdgePoints::Auto => {
             let pixel_ratio = w * h / (2 * w + 2 * h);
-            let edge_n = (n as u32 / pixel_ratio).max(20);
+            let edge_n = (n / pixel_ratio).max(20);
             add_samples_to_edge(&mut points, edge_n, w, h);
         }
         EdgePoints::Custom { count } => add_samples_to_edge(&mut points, count, w, h),
