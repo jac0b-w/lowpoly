@@ -13,7 +13,7 @@
 //! use image::{open, RgbaImage};
 //!
 //! let image = open("launch.jpg").unwrap();
-//! 
+//!
 //! let lowpoly: RgbaImage = geometrize(
 //!     &image,
 //!     Style::Lowpoly,
@@ -56,7 +56,7 @@
 //! # use image::{open, RgbaImage};
 //!
 //! let image = open("dice.png").unwrap();
-//! 
+//!
 //! let lowpoly: RgbaImage = geometrize(
 //!     &image,
 //!     Style::Lowpoly,
@@ -91,11 +91,27 @@
 //! </div>
 //!
 
-use image::{DynamicImage, GenericImageView, GrayImage, Rgba, RgbaImage};
-use rand::{RngExt, SeedableRng, rngs::SmallRng, seq::index};
+mod point;
+mod sampling;
+mod shape;
+mod style_builder;
+
+use crate::shape::{DrawableShape, Shape, ShapeKind};
+pub use crate::{
+    point::Point,
+    sampling::{ColorSampler, EdgePoints, PointSampler, SampleDistribution},
+    style_builder::CustomStyleBuilder,
+};
+
+use image::{DynamicImage, GenericImageView, Rgba, RgbaImage};
+use rand::{Rng, RngExt, SeedableRng, rngs::SmallRng};
 use rayon::prelude::*;
-use spade::{DelaunayTriangulation, Point2, Triangulation};
+use spade::{DelaunayTriangulation, Triangulation};
 use thiserror::Error;
+
+type DelaunayFace<'a> =
+    spade::handles::FaceHandle<'a, spade::handles::InnerTag, spade::Point2<f32>, (), (), ()>;
+type VoronoiEdge<'a> = spade::handles::DirectedVoronoiEdge<'a, spade::Point2<f32>, (), (), ()>;
 
 /// Error type for [`geometrize`].
 #[derive(Error, Debug)]
@@ -111,6 +127,9 @@ pub enum GeometrizeError {
     /// The `noise` parameter for [`Style::Pointillist`] was outside `[0.0, 1.0]`.
     #[error("Expected noise in range [0.0, 1.0] got {0}")]
     NoiseError(f32),
+
+    #[error("Cannot construct polygon with {0} sides")]
+    PolgonConstructionError(usize),
 }
 
 /// The visual style used to render the output image.
@@ -118,204 +137,59 @@ pub enum GeometrizeError {
 pub enum Style {
     /// Renders the image as a mosaic of colored triangles based on this [tutorial by Samuel Hinton](https://cosmiccoding.com.au/tutorials/lowpoly/).
     Lowpoly,
-    /// Renders the image as overlapping colored circles.
-    Pointillist {
-        /// `noise` controls the draw order of the circles. A value of `0.0` will draw smaller circles in the foreground, while
-        /// a value of `1.0` will randomly draw circles regardless of their size.
-        /// Must be in the range `[0.0, 1.0]`.
-        ///
-        /// ```no_run
-        /// # use geometrize::{geometrize, Style, SamplingParams};
-        /// # use image::{open, RgbaImage};
-        ///
-        /// let image = open("aurora.jpg").unwrap();
-        ///
-        /// geometrize(
-        ///     &image,
-        ///     Style::Pointillist {noise: 0.0},
-        ///     100_000,
-        ///     SamplingParams::default()
-        /// ).unwrap().save("pointillist_0_noise.png").unwrap();
-        ///
-        /// geometrize(
-        ///     &image,
-        ///     Style::Pointillist {noise: 1.0},
-        ///     20_000,
-        ///     SamplingParams::default()
-        /// ).unwrap().save("pointillist_100_noise.png").unwrap();
-        /// ```
-        ///
-        /// <div style="display:flex; gap:0.5%;">
-        ///   <figure style="width:33%; margin:0;">
-        ///     <img src="https://github.com/jac0-b/geometrize/blob/0140865afdb167904d2feb58f82eef07478130d7/images/aurora.jpg?raw=true" style="width:100%;">
-        ///     <figcaption>aurora.jpg</figcaption>
-        ///   </figure>
-        ///   <figure style="width:33%; margin:0;">
-        ///     <img src="https://github.com/jac0-b/geometrize/blob/0140865afdb167904d2feb58f82eef07478130d7/images/pointillist_noise0_20k_aurora.jpg?raw=true" style="width:100%;">
-        ///     <figcaption>pointillist_0_noise.png</figcaption>
-        ///   </figure>
-        ///   <figure style="width:33%; margin:0;">
-        ///     <img src="https://github.com/jac0-b/geometrize/blob/0140865afdb167904d2feb58f82eef07478130d7/images/pointillist_noise1_20k_aurora.jpg?raw=true" style="width:100%;">
-        ///     <figcaption>pointillist_100_noise.png</figcaption>
-        ///   </figure>
-        /// </div>
+    Voronoi,
+    Custom {
+        shapes: Vec<ShapeKind>,
         noise: f32,
     },
 }
 
-/// Parameters controlling how sample points are chosen from the image.
-pub struct SamplingParams {
-    /// Determines the random seed used for point sampling. Defaults to [`SampleSeed::Image`].
-    pub seed: SampleSeed,
-    /// Controls how many extra points are placed along the image border to prevent
-    /// distorted triangles at the edge of the image. Defaults to [`EdgePoints::Auto`].
-    pub edge_mode: EdgePoints,
-}
-
-impl Default for SamplingParams {
-    fn default() -> Self {
-        Self {
-            seed: SampleSeed::Image,
-            edge_mode: EdgePoints::Auto,
-        }
-    }
-}
-
-/// Source of randomness for point sampling.
-#[derive(Debug, Copy, Clone)]
-pub enum SampleSeed {
-    /// A fresh random seed each run -- output will differ every time.
-    Random,
-    /// A custom seed.
-    Custom(u64),
-    /// A seed derived from the image content. This is the equivalent to
-    /// using [`seed_from_image`].
-    /// ```ignore
-    /// SampleSeed::Custom(seed_from_image(&image))
+impl Style {
+    /// /// Renders the image as overlapping colored circles.
+    ///
+    /// `noise` controls the draw order of the circles. A value of `0.0` will draw smaller circles in the foreground, while
+    /// a value of `1.0` will randomly draw circles regardless of their size.
+    /// Must be in the range `[0.0, 1.0]`.
+    ///
+    /// ```no_run
+    /// # use geometrize::{geometrize, Style, SamplingParams};
+    /// # use image::{open, RgbaImage};
+    ///
+    /// let image = open("aurora.jpg").unwrap();
+    ///
+    /// geometrize(
+    ///     &image,
+    ///     Style::Pointillist {noise: 0.0},
+    ///     100_000,
+    ///     SamplingParams::default()
+    /// ).unwrap().save("pointillist_0_noise.png").unwrap();
+    ///
+    /// geometrize(
+    ///     &image,
+    ///     Style::Pointillist {noise: 1.0},
+    ///     20_000,
+    ///     SamplingParams::default()
+    /// ).unwrap().save("pointillist_100_noise.png").unwrap();
     /// ```
-    Image,
-}
-
-/// Controls how many sample points are placed along the image border.
-///
-/// This ensures the entire image frame is filled and avoids distortions at the edges.
-#[derive(Debug, Copy, Clone)]
-pub enum EdgePoints {
-    /// Automatically calculate the number of points to place around the border.
-    /// This is the default.
-    Auto,
-    /// Do not place additional points around the border. This may result in gaps
-    /// around the edges of the image.
-    Disabled,
-    /// Add exactly `count` border points, distributed evenly around the perimeter.
-    Custom { count: u32 },
-}
-
-type Color = [u8; 4];
-
-#[derive(Debug, Copy, Clone)]
-struct Point<T> {
-    x: T,
-    y: T,
-}
-
-impl<T: Copy + 'static> Point<T> {
-    fn new(x: T, y: T) -> Self {
-        Self { x, y }
-    }
-    fn cast<U: Copy + 'static>(&self) -> Point<U>
-    where
-        T: num_traits::AsPrimitive<U>,
-    {
-        Point {
-            x: self.x.as_(),
-            y: self.y.as_(),
-        }
-    }
-}
-
-impl<T: Copy + 'static> From<Point<T>> for [T; 2] {
-    fn from(p: Point<T>) -> Self {
-        [p.x, p.y]
-    }
-}
-
-impl<T: Copy + 'static> From<Point<T>> for (T, T) {
-    fn from(p: Point<T>) -> Self {
-        (p.x, p.y)
-    }
-}
-#[derive(Debug, Clone)]
-struct ColoredTriangle<T> {
-    vertices: [Point<T>; 3],
-    color: Color,
-}
-
-impl<T: Copy> ColoredTriangle<T> {
-    fn new(vertices: [Point<T>; 3], color: Color) -> Self {
-        Self { vertices, color }
-    }
-    fn draw(&self, canvas: &mut RgbaImage)
-    where
-        T: num_traits::AsPrimitive<i32>,
-    {
-        imageproc::drawing::draw_antialiased_polygon_mut(
-            canvas,
-            &self
-                .vertices
-                .map(|v| imageproc::point::Point::new(v.x.as_(), v.y.as_())),
-            Rgba(self.color),
-            imageproc::pixelops::interpolate,
-        );
-    }
-}
-#[derive(Debug, Clone)]
-struct ColoredCircle<T> {
-    center: Point<T>,
-    radius: T,
-    color: Color,
-}
-
-impl<T: Copy> ColoredCircle<T> {
-    fn draw(&self, canvas: &mut RgbaImage)
-    where
-        T: num_traits::AsPrimitive<i32>,
-    {
-        use imageproc::drawing::draw_filled_circle_mut;
-        draw_filled_circle_mut(
-            canvas,
-            self.center.cast::<i32>().into(),
-            self.radius.as_(),
-            Rgba(self.color),
-        );
-    }
-}
-
-impl<T> From<ColoredTriangle<T>> for ColoredCircle<T>
-where
-    T: Copy + num_traits::AsPrimitive<f32> + num_traits::FromPrimitive,
-{
-    fn from(ctriangle: ColoredTriangle<T>) -> Self {
-        let [v1, v2, v3] = ctriangle.vertices;
-
-        // calculate centroid of triangle
-        let cx = (v1.x.as_() + v2.x.as_() + v3.x.as_()) / 3.0;
-        let cy = (v1.y.as_() + v2.y.as_() + v3.y.as_()) / 3.0;
-
-        // calculate distances from centroid to vertices
-        let [a, b, c] = [v1, v2, v3].map(|Point { x, y }| f32::hypot(cx - x.as_(), cy - y.as_()));
-
-        // +0.5 to account for any rounding down i.e. casts
-        // this ensures that the circles always cover the full image.
-        let radius = a.max(b).max(c) + 0.5;
-
-        ColoredCircle {
-            center: Point {
-                x: T::from_f32(cx).unwrap(),
-                y: T::from_f32(cy).unwrap(),
-            },
-            radius: T::from_f32(radius).unwrap(),
-            color: ctriangle.color,
+    ///
+    /// <div style="display:flex; gap:0.5%;">
+    ///   <figure style="width:33%; margin:0;">
+    ///     <img src="https://github.com/jac0-b/geometrize/blob/0140865afdb167904d2feb58f82eef07478130d7/images/aurora.jpg?raw=true" style="width:100%;">
+    ///     <figcaption>aurora.jpg</figcaption>
+    ///   </figure>
+    ///   <figure style="width:33%; margin:0;">
+    ///     <img src="https://github.com/jac0-b/geometrize/blob/0140865afdb167904d2feb58f82eef07478130d7/images/pointillist_noise0_20k_aurora.jpg?raw=true" style="width:100%;">
+    ///     <figcaption>pointillist_0_noise.png</figcaption>
+    ///   </figure>
+    ///   <figure style="width:33%; margin:0;">
+    ///     <img src="https://github.com/jac0-b/geometrize/blob/0140865afdb167904d2feb58f82eef07478130d7/images/pointillist_noise1_20k_aurora.jpg?raw=true" style="width:100%;">
+    ///     <figcaption>pointillist_100_noise.png</figcaption>
+    ///   </figure>
+    /// </div>
+    pub fn pointillist(noise: f32) -> Self {
+        Self::Custom {
+            shapes: vec![ShapeKind::circle()],
+            noise,
         }
     }
 }
@@ -330,6 +204,114 @@ pub fn seed_from_image(image: &DynamicImage) -> u64 {
     let mut hasher = FxHasher::with_seed(1);
     hasher.write(image.as_bytes());
     hasher.finish()
+}
+
+use core::f32;
+use std::marker::PhantomData;
+
+pub struct Untriangulated;
+pub struct Triangulated;
+
+pub struct Geometrize<'a, State, R: Rng> {
+    _state: PhantomData<State>,
+    image: &'a DynamicImage,
+    rng: R,
+    triangulation: Option<DelaunayTriangulation<spade::Point2<f32>>>,
+}
+
+impl<'a> Geometrize<'a, Untriangulated, SmallRng> {
+    pub fn new(image: &'a DynamicImage) -> Self {
+        let seed = seed_from_image(&image);
+        Self::new_with_seed(image, seed)
+    }
+    pub fn new_with_seed(image: &'a DynamicImage, seed: u64) -> Self {
+        let rng = SmallRng::seed_from_u64(seed);
+        Self {
+            _state: PhantomData,
+            image,
+            rng: rng,
+            triangulation: None,
+        }
+    }
+}
+
+impl<'a, R: Rng> Geometrize<'a, Untriangulated, R> {
+    pub fn new_with_rng(image: &'a DynamicImage, rng: R) -> Self {
+        Self {
+            _state: PhantomData,
+            image,
+            rng,
+            triangulation: None,
+        }
+    }
+    pub fn sample(
+        mut self,
+        point_sampler: PointSampler,
+    ) -> Result<Geometrize<'a, Triangulated, R>, GeometrizeError> {
+        let points: Vec<spade::Point2<f32>> = point_sampler.generate(self.image, &mut self.rng)?;
+        let triangulation = DelaunayTriangulation::bulk_load(points).unwrap();
+
+        Ok(Geometrize {
+            _state: PhantomData,
+            image: self.image,
+            rng: self.rng,
+            triangulation: Some(triangulation),
+        })
+    }
+    pub fn with_num_samples(
+        self,
+        samples: u32,
+    ) -> Result<Geometrize<'a, Triangulated, R>, GeometrizeError> {
+        self.sample(PointSampler::from_num_samples(samples))
+    }
+}
+
+impl<'a, R: Rng + Clone> Geometrize<'a, Triangulated, R> {
+    pub fn render_with_color_sampler(
+        &self,
+        style: &Style,
+        color_sampler: &ColorSampler,
+    ) -> Result<RgbaImage, GeometrizeError> {
+        match style {
+            Style::Custom { noise, .. } => {
+                if !(0.0..=1.0).contains(noise) {
+                    return Err(GeometrizeError::NoiseError(*noise));
+                }
+            }
+            _ => (),
+        }
+
+        let rgba_image = self.image.to_rgba8();
+        let triangulation = self.triangulation.as_ref().unwrap();
+
+        let drawable_shapes = match style {
+            Style::Lowpoly => lowpoly(&rgba_image, triangulation, color_sampler),
+            Style::Voronoi => voronoi(&rgba_image, triangulation, &color_sampler),
+            Style::Custom { shapes, noise } => custom_shapes(
+                &rgba_image,
+                triangulation,
+                shapes,
+                *noise,
+                &color_sampler,
+                &mut self.rng.clone(),
+            ),
+        }?;
+
+        let (w, h) = self.image.dimensions();
+
+        // draw shapes onto image
+        let mut canvas = RgbaImage::from_pixel(w, h, Rgba([0; 4]));
+        for drawable_shape in drawable_shapes {
+            drawable_shape.draw(&mut canvas)
+        }
+
+        Ok(canvas)
+    }
+
+    pub fn render(&self, style: &Style) -> Result<RgbaImage, GeometrizeError> {
+        let color_sampler = ColorSampler::default();
+        self.render_with_color_sampler(style, &color_sampler)
+    }
 }
 
 /// Convert an image into geometric art.
@@ -360,7 +342,7 @@ pub fn seed_from_image(image: &DynamicImage) -> u64 {
 /// # use image::{open, RgbaImage};
 ///
 /// let image = open("launch.jpg").unwrap();
-/// 
+///
 /// let lowpoly: RgbaImage = geometrize(
 ///     &image,
 ///     Style::Lowpoly,
@@ -377,101 +359,187 @@ pub fn seed_from_image(image: &DynamicImage) -> u64 {
 /// ).unwrap();
 /// pointillist.save("pointillist_20k.png").unwrap();
 /// ```
-pub fn geometrize(
-    image: &DynamicImage,
-    style: Style,
-    n: u32,
-    sampling: SamplingParams,
-) -> Result<RgbaImage, GeometrizeError> {
-    let (w, h) = image.dimensions();
-    let pixels = w * h;
-
-    if !(10..=(w * h)).contains(&n) {
-        return Err(GeometrizeError::NSamplesError {
-            num_pixels: pixels,
-            n,
-        });
-    }
-
-    let rng = match sampling.seed {
-        SampleSeed::Random => rand::make_rng(),
-        SampleSeed::Custom(state) => SmallRng::seed_from_u64(state),
-        SampleSeed::Image => SmallRng::seed_from_u64(seed_from_image(image)),
-    };
-    match style {
-        Style::Lowpoly => lowpoly(image, n, rng, sampling.edge_mode),
-        Style::Pointillist { noise } => pointillist(image, n, noise, rng, sampling.edge_mode),
-    }
-}
 
 fn lowpoly(
-    image: &DynamicImage,
-    n: u32,
-    mut rng: SmallRng,
-    edge_mode: EdgePoints,
-) -> Result<RgbaImage, GeometrizeError> {
-    let grayscale = DynamicImage::ImageLuma8(image.to_luma8());
-    let diff_image = diff_of_gaussians(grayscale)?;
-
-    let points: Vec<[f32; 2]> = sample(&diff_image, n, &mut rng, edge_mode)?
-        .iter()
-        .map(|[x, y]| [*x as f32, *y as f32])
+    image: &RgbaImage,
+    triangulation: &DelaunayTriangulation<spade::Point2<f32>>,
+    color_sampling: &ColorSampler,
+) -> Result<Vec<DrawableShape>, GeometrizeError> {
+    let faces = triangulation.inner_faces().collect();
+    let colored_triangles = faces_to_triangle_par_iter(faces)
+        .map(|triangle| {
+            shape::DrawableShape::from_shape_image(
+                &ShapeKind::Polygon(triangle),
+                &image,
+                &color_sampling,
+            )
+        })
         .collect();
-
-    let triangulation = delaunay(&points[..]);
-    let colored_triangles = get_color_of_tri(image, &triangulation);
-
-    let (w, h) = image.dimensions();
-    let mut background = RgbaImage::from_pixel(w, h, Rgba([0, 0, 0, 0]));
-    for triangle in colored_triangles {
-        triangle.draw(&mut background);
-    }
-
-    Ok(background)
+    Ok(colored_triangles)
 }
 
-fn pointillist(
-    image: &DynamicImage,
-    n: u32,
+fn voronoi(
+    image: &RgbaImage,
+    triangulation: &DelaunayTriangulation<spade::Point2<f32>>,
+    color_sampler: &ColorSampler,
+) -> Result<Vec<DrawableShape>, GeometrizeError> {
+    let dimensions = image.dimensions();
+
+    let colored_polygons: Vec<_> = triangulation
+        .voronoi_faces()
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .filter_map(|face| {
+            let vertices: Vec<Point> = face
+                .adjacent_edges()
+                .flat_map(|edge| voronoi_edge_to_vertex_pair(edge, &dimensions))
+                .flatten()
+                .collect();
+
+            let vertices = add_vertices_at_corners(vertices, &dimensions);
+
+            let polygon = shape::Polygon::try_from(vertices)
+                .expect("Polygon should have at least 3 vertices.");
+            Some(shape::DrawableShape::from_shape_image(
+                &shape::ShapeKind::Polygon(polygon),
+                &image,
+                color_sampler,
+            ))
+        })
+        .collect();
+
+    Ok(colored_polygons)
+}
+
+fn custom_shapes<R: Rng>(
+    image: &RgbaImage,
+    triangulation: &DelaunayTriangulation<spade::Point2<f32>>,
+    shapes: &Vec<shape::ShapeKind>,
     noise: f32,
-    mut rng: SmallRng,
-    edge_mode: EdgePoints,
-) -> Result<RgbaImage, GeometrizeError> {
-    if !(0.0..=1.0).contains(&noise) {
-        return Err(GeometrizeError::NoiseError(noise));
-    }
+    color_sampler: &ColorSampler,
+    mut rng: &mut R,
+) -> Result<Vec<DrawableShape>, GeometrizeError> {
+    let faces: Vec<_> = triangulation.inner_faces().collect();
 
-    let grayscale = DynamicImage::ImageLuma8(image.to_luma8());
-    let diff_image = diff_of_gaussians(grayscale)?;
+    let rotations: Vec<f32> = rng.random_iter().take(faces.len()).collect();
 
-    let points: Vec<[f32; 2]> = sample(&diff_image, n, &mut rng, edge_mode)?
-        .iter()
-        .map(|[x, y]| [*x as f32, *y as f32])
+    let dist = rand::distr::Uniform::new(0, shapes.len()).unwrap();
+    let shape_indices: Vec<usize> = rng.sample_iter(dist).take(faces.len()).collect();
+
+    let mut drawable_shapes: Vec<_> = faces_to_triangle_par_iter(faces)
+        .zip(rotations.into_par_iter())
+        .zip(shape_indices.into_par_iter())
+        .map(|((tri, rot), index)| {
+            // + 1.3 to ensure the image is covered
+            let scale = 1.3 + tri.circumradius().expect("tri should be a triangle");
+            let circumcemter = tri.circumcenter().expect("tri should be a triangle");
+
+            let shape = &shapes[index].transformed(scale, circumcemter.into(), rot);
+
+            (
+                scale,
+                DrawableShape::from_shape_image(shape, image, color_sampler),
+            )
+        })
         .collect();
 
-    let triangulation = delaunay(&points[..]);
-    let vertices_colors = get_color_of_tri(image, &triangulation);
+    drawable_shapes.sort_by(|(a, _), (b, _)| b.total_cmp(a));
 
-    let (w, h) = image.dimensions();
-    let mut background = RgbaImage::from_pixel(w, h, Rgba([0, 0, 0, 0]));
+    let mut drawable_shapes: Vec<_> = drawable_shapes.into_iter().map(|(_, p)| p).collect();
 
-    let mut circles: Vec<ColoredCircle<_>> = vertices_colors
-        .into_iter()
-        .map(|colored_triangle| colored_triangle.into())
-        .collect();
+    add_noise(&mut drawable_shapes, noise, &mut rng);
 
-    circles.sort_by(|a, b| b.radius.total_cmp(&a.radius));
-
-    add_noise(&mut circles, noise, &mut rng);
-
-    for circle in circles {
-        circle.draw(&mut background);
-    }
-
-    Ok(background)
+    Ok(drawable_shapes)
 }
 
-fn add_noise<T>(v: &mut [T], displacement_fraction: f32, rng: &mut SmallRng) {
+fn faces_to_triangle_par_iter(
+    faces: Vec<DelaunayFace>,
+) -> impl IndexedParallelIterator<Item = shape::Polygon> {
+    faces.into_par_iter().map(|face| {
+        let vertices: Vec<Point> = face
+            .vertices()
+            .iter()
+            .map(|v| v.position().into())
+            .collect();
+        shape::Polygon::try_from(vertices).unwrap()
+    })
+}
+
+fn voronoi_edge_to_vertex_pair(edge: VoronoiEdge, dimensions: &(u32, u32)) -> [Option<Point>; 2] {
+    use spade::handles::VoronoiVertex::Inner;
+
+    match edge.as_undirected().vertices() {
+        [Inner(from), Inner(to)] => [
+            Some(Point::from(from.circumcenter()).clamped_to_frame(*dimensions)),
+            Some(Point::from(to.circumcenter()).clamped_to_frame(*dimensions)),
+        ],
+        [Inner(inner), _] | [_, Inner(inner)] => {
+            let inner_point = Point::from(inner.circumcenter()).clamped_to_frame(*dimensions);
+            [
+                Some(inner_point),
+                Some(
+                    inner_point
+                        .clamped_to_frame_direction(&edge.direction_vector().into(), dimensions),
+                ),
+            ]
+        }
+        _ => {
+            // https://docs.rs/spade/latest/spade/struct.DelaunayTriangulation.html#extracting-the-voronoi-diagram-example
+            [None, None]
+        }
+    }
+}
+
+fn add_vertices_at_corners(mut vertices: Vec<Point>, dimensions: &(u32, u32)) -> Vec<Point> {
+    let w = dimensions.0 as f32;
+    let h = dimensions.1 as f32;
+    let corners = [
+        Point::from([0.0, 0.0]),
+        Point::from([w, 0.0]),
+        Point::from([w, h]),
+        Point::from([0.0, h]),
+    ];
+
+    let boundary_count = vertices
+        .iter()
+        .filter(|p| p.x_near(0.0) || p.y_near(0.0) || p.x_near(w) || p.y_near(h))
+        .count();
+
+    let touches_left: Vec<_> = vertices.iter().filter(|p| p.x_near(0.0)).copied().collect();
+    let touches_right: Vec<_> = vertices.iter().filter(|p| p.x_near(w)).copied().collect();
+    let touches_top: Vec<_> = vertices.iter().filter(|p| p.y_near(0.0)).copied().collect();
+    let touches_bottom: Vec<_> = vertices.iter().filter(|p| p.y_near(h)).copied().collect();
+
+    if boundary_count >= 2 {
+        for corner in corners {
+            if vertices.iter().any(|p| p.near(corner)) {
+                continue;
+            }
+            let needs_corner = match corner {
+                c if c.near([0.0, 0.0].into()) => {
+                    !touches_left.is_empty() && !touches_top.is_empty()
+                }
+                c if c.near([w, 0.0].into()) => {
+                    !touches_right.is_empty() && !touches_top.is_empty()
+                }
+                c if c.near([w, h].into()) => {
+                    !touches_right.is_empty() && !touches_bottom.is_empty()
+                }
+                c if c.near([0.0, h].into()) => {
+                    !touches_left.is_empty() && !touches_bottom.is_empty()
+                }
+                _ => panic!("Points should be corners."),
+            };
+            if needs_corner {
+                vertices.push(corner);
+            }
+        }
+    }
+
+    vertices
+}
+
+fn add_noise<T, R: Rng>(v: &mut [T], displacement_fraction: f32, rng: &mut R) {
     let len = v.len();
     if len == 0 {
         return;
@@ -483,187 +551,4 @@ fn add_noise<T>(v: &mut [T], displacement_fraction: f32, rng: &mut SmallRng) {
         let j = rng.random_range(i..=(i + max_displacement).min(len - 1));
         v.swap(i, j);
     }
-}
-
-fn diff_of_gaussians(gray_image: DynamicImage) -> Result<GrayImage, GeometrizeError> {
-    let (width, height) = gray_image.dimensions();
-
-    let gauss1 = add_blur(gray_image.clone(), 2.0)?.to_luma32f();
-    let gauss2 = add_blur(gray_image, 30.0)?.to_luma32f();
-
-    let diff: Vec<f32> = gauss1
-        .pixels()
-        .zip(gauss2.pixels())
-        .map(|(p1, p2)| {
-            let d = p1.0[0] - p2.0[0];
-            if d < 0.0 { d * 0.1 } else { d }
-        })
-        .collect();
-    let max_diff = diff.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    Ok(GrayImage::from_vec(
-        width,
-        height,
-        diff.iter()
-            .map(|e| ((e.abs() / max_diff).sqrt() * 255.0) as u8)
-            .collect::<Vec<u8>>(),
-    )
-    .expect("Should always be able to rebuild image from gray_image dimensions"))
-}
-
-fn sample(
-    diff_image: &GrayImage,
-    n: u32,
-    mut rng: &mut SmallRng,
-    edge_mode: EdgePoints,
-) -> Result<Vec<[u32; 2]>, GeometrizeError> {
-    let (w, h) = diff_image.dimensions();
-    let num_pixels = w * h;
-
-    let mut points: Vec<[u32; 2]> = index::sample(&mut rng, num_pixels as usize, n as usize - 4)
-        .into_iter()
-        .filter_map(|rand_index| {
-            let (rand_x, rand_y) = (rand_index as u32 % w, rand_index as u32 / w);
-            let rand_luma = rng.random_range(0..255);
-            let value = diff_image.get_pixel(rand_x, rand_y).to_owned().0[0];
-
-            if rand_luma < value {
-                Some([rand_x, rand_y])
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    match edge_mode {
-        EdgePoints::Auto => {
-            let pixel_ratio = w * h / (2 * w + 2 * h);
-            let edge_n = (n / pixel_ratio).max(20);
-            add_samples_to_edge(&mut points, edge_n, w, h);
-        }
-        EdgePoints::Custom { count } => add_samples_to_edge(&mut points, count, w, h),
-        EdgePoints::Disabled => (),
-    }
-
-    Ok(points)
-}
-
-fn add_samples_to_edge(points: &mut Vec<[u32; 2]>, n: u32, w: u32, h: u32) {
-    let half_perimeter = w + h;
-    let points_along_width = w * n / half_perimeter;
-    let points_along_height = h * n / half_perimeter;
-
-    // corners
-    points.extend([[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1]]);
-
-    // top and bottom edges
-    points.extend((1..points_along_width).flat_map(|x| {
-        let px = (w * x) / points_along_width;
-        [[px, 0], [px, h - 1]]
-    }));
-
-    // left and right edges
-    points.extend((1..points_along_height).flat_map(|y| {
-        let py = (h * y) / points_along_height;
-        [[0, py], [w - 1, py]]
-    }));
-}
-
-fn delaunay(samples: &[[f32; 2]]) -> DelaunayTriangulation<Point2<f32>> {
-    let points: Vec<Point2<f32>> = samples.iter().map(|&[x, y]| Point2::new(x, y)).collect();
-    DelaunayTriangulation::bulk_load(points).unwrap()
-}
-
-struct BoundingBox {
-    min_x: u32,
-    min_y: u32,
-    max_x: u32,
-    max_y: u32,
-}
-
-impl BoundingBox {
-    fn from_positions(positions: &[Point2<f32>; 3]) -> Self {
-        Self {
-            min_x: positions.iter().map(|p| p.x as u32).min().unwrap(),
-            min_y: positions.iter().map(|p| p.y as u32).min().unwrap(),
-            max_x: positions.iter().map(|p| p.x.ceil() as u32).max().unwrap(),
-            max_y: positions.iter().map(|p| p.y.ceil() as u32).max().unwrap(),
-        }
-    }
-    fn pixel_coords(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
-        let xs = self.min_x..=self.max_x;
-        let ys = self.min_y..=self.max_y;
-        ys.flat_map(move |y| xs.clone().map(move |x| (x, y)))
-    }
-}
-
-struct Triangle([Point2<f32>; 3]);
-
-impl Triangle {
-    fn bounding_box(&self) -> BoundingBox {
-        BoundingBox::from_positions(&self.0)
-    }
-    // Is the point inside of the triangle?
-    fn contains(&self, x: f32, y: f32) -> bool {
-        let [a, b, c] = &self.0;
-        let p = (x, y);
-
-        let cross = |(ax, ay): (f32, f32), (bx, by): (f32, f32), (cx, cy): (f32, f32)| {
-            (ax - cx) * (by - cy) - (bx - cx) * (ay - cy)
-        };
-
-        let d1 = cross(p, (a.x, a.y), (b.x, b.y));
-        let d2 = cross(p, (b.x, b.y), (c.x, c.y));
-        let d3 = cross(p, (c.x, c.y), (a.x, a.y));
-
-        // Point is inside iff it's on the same side of all three edges
-        let all_non_negative = d1 >= 0.0 && d2 >= 0.0 && d3 >= 0.0;
-        let all_non_positive = d1 <= 0.0 && d2 <= 0.0 && d3 <= 0.0;
-        all_non_negative || all_non_positive
-    }
-    fn avg_pixel_color(&self, image: &RgbaImage) -> Color {
-        let bbox = self.bounding_box();
-
-        let (sum, count) = bbox
-            .pixel_coords()
-            .filter(|&(x, y)| self.contains(x as f32, y as f32))
-            .map(|(x, y)| *image.get_pixel(x, y))
-            .fold(([0u64; 4], 0u64), |(mut acc, count), px| {
-                acc.iter_mut().zip(px.0).for_each(|(a, b)| *a += b as u64);
-                (acc, count + 1)
-            });
-
-        if count == 0 {
-            return [0, 0, 0, 0];
-        }
-        sum.map(|s| (s / count) as u8)
-    }
-}
-
-fn get_color_of_tri(
-    image: &DynamicImage,
-    tri: &DelaunayTriangulation<Point2<f32>>,
-) -> Vec<ColoredTriangle<f32>> {
-    let rgba = image.to_rgba8();
-    tri.inner_faces()
-        .collect::<Vec<_>>()
-        .par_iter()
-        .map(|face| {
-            let positions = face.vertices().map(|v| v.position());
-            let triangle = Triangle(positions);
-            let color = triangle.avg_pixel_color(&rgba);
-            ColoredTriangle::new(positions.map(|v| Point::new(v.x, v.y)), color)
-        })
-        .collect()
-}
-
-fn add_blur(image: DynamicImage, sigma: f64) -> Result<DynamicImage, GeometrizeError> {
-    use libblur::{self, AnisotropicRadius};
-
-    libblur::fast_gaussian_blur_image(
-        image,
-        AnisotropicRadius::new(sigma as u32),
-        libblur::EdgeMode2D::new(libblur::EdgeMode::Clamp),
-        libblur::ThreadingPolicy::Adaptive,
-    )
-    .ok_or(GeometrizeError::BlurError)
 }
