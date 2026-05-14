@@ -91,17 +91,18 @@
 //! </div>
 //!
 
+pub mod shape;
 mod point;
 mod sampling;
-mod shape;
 mod style_builder;
 
-use crate::shape::{DrawableShape, Shape, ShapeKind};
 pub use crate::{
     point::Point,
     sampling::{ColorSampler, EdgePoints, PointSampler, SampleDistribution},
     style_builder::CustomStyleBuilder,
 };
+use crate::shape::{DrawableShape, Shape, ShapeKind};
+
 
 use image::{DynamicImage, GenericImageView, Rgba, RgbaImage};
 use rand::{Rng, RngExt, SeedableRng, rngs::SmallRng};
@@ -221,7 +222,7 @@ pub struct Geometrize<'a, State, R: Rng> {
 
 impl<'a> Geometrize<'a, Untriangulated, SmallRng> {
     pub fn new(image: &'a DynamicImage) -> Self {
-        let seed = seed_from_image(&image);
+        let seed = seed_from_image(image);
         Self::new_with_seed(image, seed)
     }
     pub fn new_with_seed(image: &'a DynamicImage, seed: u64) -> Self {
@@ -229,7 +230,7 @@ impl<'a> Geometrize<'a, Untriangulated, SmallRng> {
         Self {
             _state: PhantomData,
             image,
-            rng: rng,
+            rng,
             triangulation: None,
         }
     }
@@ -272,13 +273,8 @@ impl<'a, R: Rng + Clone> Geometrize<'a, Triangulated, R> {
         style: &Style,
         color_sampler: &ColorSampler,
     ) -> Result<RgbaImage, GeometrizeError> {
-        match style {
-            Style::Custom { noise, .. } => {
-                if !(0.0..=1.0).contains(noise) {
-                    return Err(GeometrizeError::NoiseError(*noise));
-                }
-            }
-            _ => (),
+        if let Style::Custom {noise, .. } = style && !(0.0..=1.0).contains(noise) {
+            return Err(GeometrizeError::NoiseError(*noise))
         }
 
         let rgba_image = self.image.to_rgba8();
@@ -286,13 +282,13 @@ impl<'a, R: Rng + Clone> Geometrize<'a, Triangulated, R> {
 
         let drawable_shapes = match style {
             Style::Lowpoly => lowpoly(&rgba_image, triangulation, color_sampler),
-            Style::Voronoi => voronoi(&rgba_image, triangulation, &color_sampler),
+            Style::Voronoi => voronoi(&rgba_image, triangulation, color_sampler),
             Style::Custom { shapes, noise } => custom_shapes(
                 &rgba_image,
                 triangulation,
                 shapes,
                 *noise,
-                &color_sampler,
+                color_sampler,
                 &mut self.rng.clone(),
             ),
         }?;
@@ -370,8 +366,8 @@ fn lowpoly(
         .map(|triangle| {
             shape::DrawableShape::from_shape_image(
                 &ShapeKind::Polygon(triangle),
-                &image,
-                &color_sampling,
+                image,
+                color_sampling,
             )
         })
         .collect();
@@ -402,7 +398,7 @@ fn voronoi(
                 .expect("Polygon should have at least 3 vertices.");
             Some(shape::DrawableShape::from_shape_image(
                 &shape::ShapeKind::Polygon(polygon),
-                &image,
+                image,
                 color_sampler,
             ))
         })
@@ -414,7 +410,7 @@ fn voronoi(
 fn custom_shapes<R: Rng>(
     image: &RgbaImage,
     triangulation: &DelaunayTriangulation<spade::Point2<f32>>,
-    shapes: &Vec<shape::ShapeKind>,
+    shapes: &[shape::ShapeKind],
     noise: f32,
     color_sampler: &ColorSampler,
     mut rng: &mut R,
@@ -528,7 +524,7 @@ fn add_vertices_at_corners(mut vertices: Vec<Point>, dimensions: &(u32, u32)) ->
                 c if c.near([0.0, h].into()) => {
                     !touches_left.is_empty() && !touches_bottom.is_empty()
                 }
-                _ => panic!("Points should be corners."),
+                _ => unreachable!(),
             };
             if needs_corner {
                 vertices.push(corner);

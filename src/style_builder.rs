@@ -23,6 +23,12 @@ impl<State> CustomStyleBuilder<State> {
     }
 }
 
+impl Default for CustomStyleBuilder<Empty> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CustomStyleBuilder<Empty> {
     pub fn new() -> Self {
         Self {

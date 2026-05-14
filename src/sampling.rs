@@ -1,20 +1,13 @@
-use core::num;
-
-use image::{DynamicImage, GenericImageView, GrayImage, ImageBuffer, Luma};
-use rand::{Rng, RngExt, seq::index};
+use image::{DynamicImage, GenericImageView};
+use rand::{Rng, seq::index};
 
 use crate::GeometrizeError;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum ColorSampler {
     Single,
+    #[default]
     All,
-}
-
-impl Default for ColorSampler {
-    fn default() -> Self {
-        Self::All
-    }
 }
 
 pub enum PointSampler {
@@ -29,7 +22,6 @@ pub enum PointSampler {
 }
 
 /// Parameters controlling how sample points are chosen from the image.
-
 impl PointSampler {
     pub fn from_num_samples(samples: u32) -> Self {
         Self::Generated {
@@ -124,12 +116,12 @@ fn sample_points<R: Rng>(
             index::sample_weighted(rng, num_pixels, |index| diff[index] + 1.0, samples)
                 .unwrap()
                 .into_iter()
-                .map(|index| index_to_coord(index))
+                .map(index_to_coord)
                 .collect()
         }
         SampleDistribution::UniformRandom => index::sample(rng, num_pixels, samples)
             .into_iter()
-            .map(|rand_index| index_to_coord(rand_index))
+            .map(index_to_coord)
             .collect(),
     };
     Ok(points)
